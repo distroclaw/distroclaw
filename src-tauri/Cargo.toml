@@ -27,7 +27,7 @@ tokio = { version = "1", features = ["time", "macros", "sync", "net"] }
 uuid = { version = "1", features = ["v4"] }
 pdf-extract = "0.9"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-sysinfo = { version = "0.37", default-features = false, features = ["system", "disk"] }
+sysinfo = { version = "0.40", default-features = false, features = ["system", "disk"] }
 tauri-plugin-dialog = "2"
 # A second launch focuses the running window instead of starting a second engine.
 tauri-plugin-single-instance = "2.5"
