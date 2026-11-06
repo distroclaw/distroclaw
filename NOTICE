@@ -1,0 +1,13 @@
+DistroClaw Community
+Copyright 2026 The DistroClaw Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Release builds bundle third-party software and download AI models that are
+licensed separately, among them the Ollama runtime (MIT License, Copyright (c)
+Ollama; see licenses/engine/OLLAMA_LICENSE), llama.cpp, MLX and the Qwen and Gemma models. The
+full list of third-party notices ships with the app (Settings > About >
+Open-source licenses) and in THIRD_PARTY_NOTICES.md.
+
+"DistroClaw" and the DistroClaw logo are trademarks of The DistroClaw Authors;
+the Apache License does not grant permission to use them (see TRADEMARKS.md).

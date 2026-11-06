@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in DistroClaw Community does not work as described.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do not include private documents or chats.
+        Security problems go to the Security tab instead (see SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Open …\n2. Click …\n3. See …"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: DistroClaw version
+      description: Settings > About.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Computer
+      placeholder: "macOS 15.1, Apple M2, 16 GB memory"
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: AI model
+      placeholder: "Qwen 3.5 4B"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines from the log files named in CONTRIBUTING.md, with private content removed.
+      render: text

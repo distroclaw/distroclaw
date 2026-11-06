@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # Installs the version and components pinned in rust-toolchain.toml.
+      - name: Rust toolchain
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Type-check frontend
+        run: npm run typecheck
+
+      # tauri::generate_context! embeds ../dist at compile time, so the frontend must be
+      # built before any cargo command compiles the crate.
+      - name: Build frontend
+        run: npx vite build
+
+      - name: Rust formatting
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
+      # THIRD_PARTY_NOTICES.md ships with the app; it must list what this commit builds.
+      - name: Third-party notices are up to date
+        run: node scripts/third-party-notices.mjs --check
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high

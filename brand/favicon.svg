@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="DistroClaw">
+  <title>DistroClaw</title>
+  <defs>
+    <linearGradient id="dcf-tile" x1="6" y1="4" x2="58" y2="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8a74ff"/>
+      <stop offset="0.5" stop-color="#5a7ff0"/>
+      <stop offset="1" stop-color="#14c4bd"/>
+    </linearGradient>
+    <radialGradient id="dcf-shine" cx="16" cy="8" r="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.26"/>
+      <stop offset="0.6" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="dcf-claw" x1="0" y1="54" x2="0" y2="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.82"/>
+      <stop offset="1" stop-color="#fff"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#dcf-tile)"/>
+  
+  <g fill="url(#dcf-claw)"><path d="M14 50 Q9.5 27 30 13 Q26 34 14 50 Z"/><path d="M27 53 Q21.5 27 43 10 Q38 33 27 53 Z"/><path d="M40 50 Q35.5 30 53 18 Q49 36 40 50 Z"/></g>
+  
+</svg>

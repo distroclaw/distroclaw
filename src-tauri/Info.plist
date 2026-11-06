@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Shown by macOS the first time DistroClaw reads one of these locations. -->
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>DistroClaw reads files in folders you allow so the AI can answer questions about them.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>DistroClaw reads files in folders you allow so the AI can answer questions about them.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>DistroClaw reads files in folders you allow so the AI can answer questions about them.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>DistroClaw reads files in folders you allow so the AI can answer questions about them.</string>
+  <key>NSNetworkVolumesUsageDescription</key>
+  <string>DistroClaw reads files in folders you allow so the AI can answer questions about them.</string>
+</dict>
+</plist>

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="DistroClaw">
+  <title>DistroClaw</title>
+  <defs>
+    <linearGradient id="dc-tile" x1="6" y1="4" x2="58" y2="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8a74ff"/>
+      <stop offset="0.5" stop-color="#5a7ff0"/>
+      <stop offset="1" stop-color="#14c4bd"/>
+    </linearGradient>
+    <radialGradient id="dc-shine" cx="16" cy="8" r="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.26"/>
+      <stop offset="0.6" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="dc-claw" x1="0" y1="54" x2="0" y2="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.82"/>
+      <stop offset="1" stop-color="#fff"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#dc-tile)"/>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#dc-shine)"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="15.5" fill="none" stroke="#fff" stroke-opacity="0.14"/>
+  <g fill="url(#dc-claw)"><path d="M16 49 Q13.16 28.43 29 15 Q24.36 32.71 16 49 Z"/><path d="M27 52 Q23.58 27.95 41 11 Q35.9 32.15 27 52 Z"/><path d="M38 49 Q35.69 31.06 50 20 Q45.85 35.26 38 49 Z"/></g>
+  <path fill="#fff" d="M51.5 7.5 Q52.3 11.2 56 12 Q52.3 12.8 51.5 16.5 Q50.7 12.8 47 12 Q50.7 11.2 51.5 7.5 Z"/>
+</svg>

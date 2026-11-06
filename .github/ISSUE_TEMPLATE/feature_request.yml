@@ -1,0 +1,28 @@
+name: Feature idea
+description: Suggest an improvement to DistroClaw Community.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please read EDITIONS.md first. A maintainer confirms which edition an idea belongs to before anyone writes code.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: How DistroClaw could help. Sketches and examples are welcome.
+    validations:
+      required: true
+  - type: checkboxes
+    id: offer
+    attributes:
+      label: Contributing
+      options:
+        - label: I would like to work on this myself.

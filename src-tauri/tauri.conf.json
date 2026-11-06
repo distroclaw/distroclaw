@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DistroClaw",
+  "version": "0.1.0",
+  "identifier": "com.distroclaw.app",
+  "build": {
+    "beforeDevCommand": "npm run dev:app",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "DistroClaw",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 760,
+        "minHeight": 520,
+        "dragDropEnabled": false,
+        "backgroundColor": "#0a0a0f"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "Local AI chat",
+    "copyright": "\u00a9 2026 DistroClaw",
+    "macOS": {
+      "minimumSystemVersion": "14.0",
+      "signingIdentity": "-"
+    }
+  }
+}
