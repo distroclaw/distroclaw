@@ -145,9 +145,8 @@ function r2Target() {
   const hmac = (key, data) => crypto.createHmac("sha256", key).update(data).digest();
   const sha = (data) => crypto.createHash("sha256").update(data).digest("hex");
 
-  async function request(method, key, { query = {}, body, contentType } = {}) {
-    const uri = `/${bucket}/${key.split("/").map(encode).join("/")}`;
-    const qs = Object.keys(query).sort().map((k) => `${encode(k)}=${encode(query[k])}`).join("&");
+  /** Signed headers for one attempt; R2 refuses a signature more than 15 minutes old. */
+  function sign(method, uri, qs, contentType) {
     const now = new Date().toISOString().replace(/[:-]|\.\d{3}/g, "");
     const day = now.slice(0, 8);
     const headers = { host, "x-amz-content-sha256": "UNSIGNED-PAYLOAD", "x-amz-date": now };
@@ -160,13 +159,20 @@ function r2Target() {
     const signingKey = ["auto", "s3", "aws4_request"].reduce((k, part) => hmac(k, part), hmac(`AWS4${secret}`, day));
     headers.authorization = `AWS4-HMAC-SHA256 Credential=${keyId}/${scope}, SignedHeaders=${signed.join(";")}, Signature=${hmac(signingKey, toSign).toString("hex")}`;
     delete headers.host;
+    return headers;
+  }
+
+  async function request(method, key, { query = {}, body, contentType } = {}) {
+    const uri = `/${bucket}/${key.split("/").map(encode).join("/")}`;
+    const qs = Object.keys(query).sort().map((k) => `${encode(k)}=${encode(query[k])}`).join("&");
     for (let attempt = 1; ; attempt++) {
       try {
-        const res = await fetch(`https://${host}${uri}${qs ? `?${qs}` : ""}`, { method, headers, body });
-        if (res.ok || res.status === 404 || attempt === 3) return res;
+        // Signed afresh for every attempt: a retry of a large part can start long after the first.
+        const res = await fetch(`https://${host}${uri}${qs ? `?${qs}` : ""}`, { method, headers: sign(method, uri, qs, contentType), body });
+        if (res.ok || res.status === 404 || attempt === 5) return res;
         await res.body?.cancel();
       } catch (e) {
-        if (attempt === 3) fail(`${method} ${key}: ${e.cause?.message ?? e.message}`);
+        if (attempt === 5) fail(`${method} ${key}: ${e.cause?.message ?? e.message}`);
       }
       await new Promise((r) => setTimeout(r, 1000 * attempt));
     }
