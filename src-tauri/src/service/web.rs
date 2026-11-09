@@ -37,6 +37,10 @@ pub(crate) const CAPABILITY_ON: &str = "\n\nOnline search is on. The app searche
 pub(crate) const CAPABILITY_SEARCHED: &str = "\n\nThe app already searched the web for this message: answer the \
     user's request from the sources above. If an earlier reply in this conversation said you cannot search the \
     internet, that was wrong: do not repeat it.";
+/// Used instead of both when the reply has the web tools (the agent): it searches itself.
+pub(crate) const CAPABILITY_TOOLS: &str = "\n\nOnline search is on: you can search the internet yourself with \
+    web_search and read pages with read_web_page. If an earlier reply in this conversation said you cannot search \
+    the internet, that was wrong: do not repeat it.";
 /// Added when no search ran for this message (a search that ran has its own answer rules).
 pub(crate) const CAPABILITY_ASK: &str = " If the user asks you to search without saying for what, ask what to look up.";
 /// Told while it is off, so the model points to the switch instead of guessing.
@@ -295,7 +299,7 @@ const STOPWORDS: &[&str] = &[
 ];
 
 /// Words worth matching: when choosing what part of a page to keep, and whether a result is on topic.
-fn terms(queries: &[String]) -> Vec<String> {
+pub(crate) fn terms(queries: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for w in queries.iter().flat_map(|q| q.split(|c: char| !c.is_alphanumeric())) {
         let w = w.to_lowercase();
@@ -307,7 +311,7 @@ fn terms(queries: &[String]) -> Vec<String> {
 }
 
 /// A result is on topic when its title or snippet shares a word (or a word's stem) with the query.
-fn relevant(hit: &Hit, terms: &[String]) -> bool {
+pub(crate) fn relevant(hit: &Hit, terms: &[String]) -> bool {
     if terms.is_empty() {
         return true;
     }
@@ -320,7 +324,7 @@ fn relevant(hit: &Hit, terms: &[String]) -> bool {
 }
 
 /// The paragraphs of `text` that match the most search words, in page order, up to `max` chars.
-fn excerpt(text: &str, terms: &[String], max: usize) -> String {
+pub(crate) fn excerpt(text: &str, terms: &[String], max: usize) -> String {
     if text.len() <= max {
         return text.to_string();
     }
@@ -626,6 +630,118 @@ mod tests {
             assert!(m.is_none(), "nothing to save after Stop");
             assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
             assert_eq!(engine.request_count(), 1, "the answer was never requested");
+            assert!(svc.cancels.lock().unwrap().is_empty());
+        }
+
+        fn tool_call(name: &str, args: serde_json::Value) -> Step {
+            let call = json!({ "function": { "name": name, "arguments": args } });
+            Step::line(json!({ "message": { "content": "", "tool_calls": [call] }, "done": true }).to_string())
+        }
+
+        fn offered(req: &serde_json::Value) -> Vec<String> {
+            req["tools"]
+                .as_array()
+                .map(|t| t.iter().map(|t| t["function"]["name"].as_str().unwrap().to_string()).collect())
+                .unwrap_or_default()
+        }
+
+        async fn ask_agent(svc: &Services, text: &str) -> (Option<crate::db::Message>, Vec<ChatEvent>, String) {
+            let owner = svc.desktop_principal().unwrap();
+            let c = create_conversation(svc, &owner, None).unwrap();
+            let events = Mutex::new(Vec::new());
+            let options = SendOptions { skill_id: Some("agent".into()), ..SendOptions::default() };
+            let m = send_message(svc, &owner, &c.id, text, vec![], options, &|e| {
+                events.lock().unwrap().push(e);
+                true
+            })
+            .await
+            .unwrap();
+            (m, events.into_inner().unwrap(), c.id)
+        }
+
+        #[tokio::test]
+        async fn the_agent_searches_reads_and_cites_with_its_own_tools() {
+            let (svc, engine, site) = setup(0).await;
+            engine.push(vec![tool_call("web_search", json!({ "query": "rust release" }))]);
+            engine.push(vec![tool_call("read_web_page", json!({ "url": format!("{}/a", site.url) }))]);
+            engine.push(vec![answer("Rust 1.99 came out on 30 October 2026 [1].")]);
+            let (m, events, conversation_id) = ask_agent(&svc, "find out when the latest rust came out").await;
+            assert_eq!(m.unwrap().content, "Rust 1.99 came out on 30 October 2026 [1].");
+
+            // No planning call: the agent decides itself, with the web tools and no folders.
+            assert_eq!(engine.request_count(), 3);
+            assert!(engine.request(0).get("format").is_none());
+            assert_eq!(offered(&engine.request(0)), ["web_search", "read_web_page"]);
+            let system = engine.request(0)["messages"][0]["content"].as_str().unwrap().to_string();
+            assert!(system.contains("## Skill: Agent") && system.contains("web_search searches"), "{system}");
+            assert!(!system.contains("Folders you may use"));
+            assert!(last_message(&engine.request(0)).contains("search the internet yourself with web_search"));
+            let fed = engine.request(2)["messages"].as_array().unwrap().iter().filter(|m| m["role"] == "tool").count();
+            assert_eq!(fed, 2, "both results went back to the model");
+            assert!(engine.request(2).to_string().contains("released on 30 October 2026"));
+            let mut hits = site.hits();
+            hits.sort();
+            assert_eq!(hits, ["/a", "/html/?q=rust+release"]);
+
+            // The UI sees the sources while the reply runs, and they are saved with it.
+            assert!(!events.iter().any(|e| matches!(e, ChatEvent::Searching)));
+            assert!(events.iter().any(|e| matches!(e, ChatEvent::Sources { sources } if sources.len() == 2)));
+            let owner = svc.desktop_principal().unwrap();
+            let saved = get_messages(&svc, &owner, &conversation_id).unwrap().pop().unwrap();
+            let sources = saved.tool_events.iter().find_map(|e| match e {
+                ChatEvent::Sources { sources } => Some(sources.clone()),
+                _ => None,
+            });
+            let sources = sources.expect("sources are saved with the reply");
+            assert_eq!((sources[0].n, sources[0].url.as_str()), (1, format!("{}/a", site.url).as_str()));
+            let calls = saved.tool_events.iter().filter(|e| matches!(e, ChatEvent::ToolCall { .. })).count();
+            assert_eq!(calls, 2, "the steps show as tool rows");
+        }
+
+        #[tokio::test]
+        async fn the_agent_cannot_read_an_address_it_made_up() {
+            let (svc, engine, site) = setup(0).await;
+            let made_up = format!("{}/collect?data=secret", site.url);
+            engine.push(vec![tool_call("read_web_page", json!({ "url": made_up }))]);
+            engine.push(vec![answer("I could not read that page.")]);
+            let (m, _, _) = ask_agent(&svc, "open that page").await;
+            assert_eq!(m.unwrap().content, "I could not read that page.");
+            assert!(site.hits().is_empty(), "nothing left the computer");
+            assert!(engine.request(1).to_string().contains("Only pages from your web_search results"));
+        }
+
+        #[tokio::test]
+        async fn with_search_off_the_agent_gets_no_web_tools() {
+            let (svc, engine, site) = setup(0).await;
+            settings::set(&svc, &svc.desktop_principal().unwrap(), "web_search", "off").unwrap();
+            engine.push(vec![answer("Here is a plan.")]);
+            let (m, _, _) = ask_agent(&svc, "plan a trip to Lyon").await;
+            assert_eq!(m.unwrap().content, "Here is a plan.");
+            assert_eq!(engine.request_count(), 1);
+            assert!(offered(&engine.request(0)).is_empty(), "no folders and no search: no tools");
+            assert!(last_message(&engine.request(0)).contains("Online search is off"));
+            assert!(site.hits().is_empty());
+        }
+
+        #[tokio::test]
+        async fn stop_during_a_slow_agent_search_returns_at_once() {
+            let (svc, engine, _site) = setup(10_000).await;
+            engine.push(vec![tool_call("web_search", json!({ "query": "rust release" }))]);
+            let owner = svc.desktop_principal().unwrap();
+            let conversation = create_conversation(&svc, &owner, None).unwrap();
+            let (svc_ref, id) = (&svc, conversation.id.clone());
+            let options = SendOptions { skill_id: Some("agent".into()), ..SendOptions::default() };
+            let started = Instant::now();
+            send_message(svc_ref, &owner, &id, "latest rust?", vec![], options, &|e| {
+                if matches!(e, ChatEvent::ToolCall { .. }) {
+                    stop_generation(svc_ref, &owner, &id).unwrap();
+                }
+                true
+            })
+            .await
+            .unwrap();
+            assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+            assert_eq!(engine.request_count(), 1);
             assert!(svc.cancels.lock().unwrap().is_empty());
         }
     }

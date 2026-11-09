@@ -30,7 +30,7 @@ The window's content security policy allows no remote content: no remote scripts
 | `engine.rs` | Starts, watches and stops the local AI engine; talks to it over HTTP on the loopback interface |
 | `models.rs`, `hardware.rs` | The model catalogue, downloads with progress, and the model suggested for this Mac's memory |
 | `chat.rs` | Streaming chat requests to the engine |
-| `tools/` | Tools the model may call; Community has read-only file tools (`tools/files.rs`) |
+| `tools/` | Tools the model may call; Community has read-only file tools (`tools/files.rs`) and, while online search is on, web tools for the agent skill (`tools/web.rs`) |
 | `skills/` | Skill files (Markdown with front matter): loading, routing a message to a skill, building the system prompt |
 | `access.rs` | Which folders the model may read, with checks against hidden and protected paths and symbolic-link escapes |
 | `web.rs` | Online search: providers, safe page fetching (public addresses only, size and time limits) and text extraction |
@@ -45,7 +45,7 @@ Built-in skills live in `src-tauri/skills/*.md`.
 
 1. The UI calls `send_message`. The backend stores the message and picks a skill: the one you chose, or one matched by the router.
 2. It builds the system prompt from your instructions, the project's instructions and the skill. If folders are attached, the read-only file tools are offered with them.
-3. If online search is on and the question needs current information, `service/web.rs` searches and adds the sources.
+3. If online search is on and the question needs current information, `service/web.rs` searches and adds the sources. The agent skill searches itself instead, with the web tools.
 4. The engine streams the answer. Tool calls run in the backend under the folder checks, and their results go back to the model.
 5. The reply is saved, and events stream to the UI as it is written.
 

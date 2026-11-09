@@ -14,6 +14,15 @@ const basename = (v: unknown): string => {
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
+/** The site an address points to, without a leading "www."; empty when it does not parse. */
+const domainOf = (v: unknown): string => {
+  try {
+    return new URL(str(v)).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+};
+
 /** One plain sentence per tool call; raw arguments never show outside the expanded body. */
 export function describeTool(name: string, args: Record<string, unknown>): string {
   switch (name) {
@@ -29,6 +38,10 @@ export function describeTool(name: string, args: Record<string, unknown>): strin
       return `Checked ${basename(args.path) || "a file"}`;
     case "get_allowed_folders":
       return "Checked allowed folders";
+    case "web_search":
+      return str(args.query) ? `Searched the web for “${str(args.query)}”` : "Searched the web";
+    case "read_web_page":
+      return `Read ${domainOf(args.url) || "a web page"}`;
     default: {
       const label = ext.toolLabels[name];
       return typeof label === "string" ? label : name.replace(/_/g, " ");

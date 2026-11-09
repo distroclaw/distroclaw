@@ -64,11 +64,13 @@ pub struct Page {
     pub blocked: bool,
 }
 
+/// Cheap to clone: clones share the connection pool and the provider pause.
+#[derive(Clone)]
 pub struct Web {
     pub cfg: WebConfig,
     http: reqwest::Client,
     /// DuckDuckGo is left alone until then after it asked for a bot check.
-    paused_until: Mutex<Option<Instant>>,
+    paused_until: Arc<Mutex<Option<Instant>>>,
 }
 
 impl Web {
@@ -97,7 +99,7 @@ impl Web {
             .dns_resolver(Arc::new(PublicOnly { allow_private: allow }))
             .build()
             .expect("the web client builds");
-        Self { cfg, http, paused_until: Mutex::new(None) }
+        Self { cfg, http, paused_until: Arc::new(Mutex::new(None)) }
     }
 
     /// Up to `max` results from the first provider that answers. A provider that asks for a bot

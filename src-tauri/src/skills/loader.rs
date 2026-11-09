@@ -14,9 +14,12 @@ pub const BUILTIN: &[&str] = &[
     include_str!("../../skills/image-analysis.md"),
     include_str!("../../skills/summarizer.md"),
     include_str!("../../skills/translator.md"),
+    include_str!("../../skills/agent.md"),
 ];
 
 pub const GENERAL_CHAT: &str = "general-chat";
+/// Works through a task in steps, with a larger budget and, while Online search is on, the web tools.
+pub const AGENT: &str = "agent";
 pub const KNOWN_AREAS: &[&str] = &["chat", "documents", "invoices", "organize"];
 pub const KNOWN_ATTACHMENTS: &[&str] = &["image", "document", "pdf", "docx", "txt", "md", "csv", "xlsx"];
 const MAX_KEYWORDS: usize = 20;
@@ -224,7 +227,7 @@ mod tests {
         slashes.sort();
         slashes.dedup();
         assert_eq!((ids.len(), slashes.len()), (skills.len(), skills.len()));
-        for id in ["general-chat", "document-qa", "image-analysis", "summarizer", "translator"] {
+        for id in ["general-chat", "document-qa", "image-analysis", "summarizer", "translator", "agent"] {
             assert!(skills.iter().any(|s| s.id == id), "{id}");
         }
         // Every built-in of this edition parses and keeps every tool it names.

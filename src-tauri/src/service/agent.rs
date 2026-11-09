@@ -1,11 +1,12 @@
-//! One reply turn: the model may call tools a few times before it answers. Read tools run at
-//! once; a proposing tool ends the turn so the user can approve. Budgets keep a small model
-//! from looping: an iteration cap, a cap on tool output per turn, and a wall-clock limit.
+//! One reply turn: the model may call tools a few times before it answers. Read and web tools run
+//! at once; a proposing tool ends the turn so the user can approve. Budgets keep a small model
+//! from looping: an iteration cap, a cap on tool output per turn, and a wall-clock limit. The
+//! agent skill works in more steps, so it gets a larger budget.
 
 use super::Services;
 use super::chat::{Cancel, Emit, stream_once};
 use crate::attachments;
-use crate::chat::{ChatEvent, ChatMessage, ChatOptions, ChatRequest};
+use crate::chat::{ChatEvent, ChatMessage, ChatOptions, ChatRequest, Source};
 use crate::db::{Message, ToolEventRow};
 use crate::fileops::PlannedOp;
 use crate::license::Entitlements;
@@ -19,6 +20,21 @@ pub const MAX_ITERATIONS: usize = 6;
 /// Tool output fed back to the model within one turn.
 pub const MAX_TURN_TOOL_CHARS: usize = 20_000;
 pub const TURN_BUDGET: Duration = Duration::from_secs(300);
+
+/// How far one reply may go before it must answer with what it has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Budget {
+    /// Model calls, the last one without tools.
+    pub iterations: usize,
+    pub tool_chars: usize,
+    pub time: Duration,
+}
+
+impl Budget {
+    pub const REPLY: Self = Self { iterations: MAX_ITERATIONS, tool_chars: MAX_TURN_TOOL_CHARS, time: TURN_BUDGET };
+    /// The agent searches, reads and searches again; about 8k tokens of results fit the default context.
+    pub const AGENT: Self = Self { iterations: 10, tool_chars: 32_000, time: Duration::from_secs(600) };
+}
 /// Only the newest user messages carry their images to the engine again; older ones name them.
 pub const IMAGE_HISTORY_TURNS: usize = 2;
 pub const MAX_IMAGES_IN_CONTEXT: usize = 6;
@@ -30,6 +46,8 @@ pub struct TurnOutcome {
     pub events: Vec<ToolEventRow>,
     /// File changes the model proposed; the turn ended there.
     pub proposal: Option<(String, Vec<PlannedOp>)>,
+    /// Web pages the web tools found or read, as the reply cites them.
+    pub sources: Vec<Source>,
     pub error: Option<String>,
     pub cancelled: bool,
 }
@@ -97,23 +115,44 @@ pub(crate) async fn run_turn(
     ent: &Entitlements,
     ctx: &ToolCtx,
     model: &str,
+    messages: Vec<ChatMessage<'_>>,
+    num_ctx: u32,
+    think: bool,
+    tools: &[&'static ToolSpec],
+    budget: Budget,
+    emit: Emit<'_>,
+    cancel: &Cancel,
+) -> TurnOutcome {
+    let mut out = run_steps(svc, ent, ctx, model, messages, num_ctx, think, tools, budget, emit, cancel).await;
+    out.sources = ctx.web.as_ref().map(|w| w.sources()).unwrap_or_default();
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_steps(
+    svc: &Services,
+    ent: &Entitlements,
+    ctx: &ToolCtx,
+    model: &str,
     mut messages: Vec<ChatMessage<'_>>,
     num_ctx: u32,
     think: bool,
     tools: &[&'static ToolSpec],
+    budget: Budget,
     emit: Emit<'_>,
     cancel: &Cancel,
 ) -> TurnOutcome {
     let offered: Vec<Value> = tools.iter().map(|t| t.to_ollama()).collect();
     let names: HashSet<&str> = tools.iter().map(|t| t.name).collect();
-    let deadline = Instant::now() + TURN_BUDGET;
+    let deadline = Instant::now() + budget.time;
     let mut out = TurnOutcome::default();
     let mut tool_chars = 0usize;
     let mut seen: HashSet<(String, String)> = HashSet::new();
     let mut seq = 0i64;
+    let mut sources_shown = 0usize;
 
-    for iter in 0..MAX_ITERATIONS {
-        let last = iter + 1 == MAX_ITERATIONS || tool_chars >= MAX_TURN_TOOL_CHARS || Instant::now() >= deadline;
+    for iter in 0..budget.iterations {
+        let last = iter + 1 == budget.iterations || tool_chars >= budget.tool_chars || Instant::now() >= deadline;
         let request = ChatRequest {
             model,
             messages: &messages,
@@ -160,7 +199,14 @@ pub(crate) async fn run_turn(
                     message: "Already called with these arguments in this reply; use the earlier result.".into(),
                 }
             } else {
-                tools::run_tool(ctx, ent, &name, &args).await
+                // A web tool may take a while; Stop ends it at once.
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        out.cancelled = true;
+                        return out;
+                    }
+                    o = tools::run_tool(ctx, ent, &name, &args) => o,
+                }
             };
             let duration_ms = started.elapsed().as_millis() as i64;
             if let ToolOutcome::Proposal { title, ops, summary } = outcome {
@@ -184,6 +230,10 @@ pub(crate) async fn run_turn(
             };
             tool_chars += result.len();
             emit(ChatEvent::ToolResult { id, ok, summary: summary.clone() });
+            if let Some(found) = ctx.web.as_ref().map(|w| w.sources()).filter(|s| s.len() > sources_shown) {
+                sources_shown = found.len();
+                emit(ChatEvent::Sources { sources: found });
+            }
             out.events.push(ToolEventRow {
                 seq,
                 name: name.clone(),

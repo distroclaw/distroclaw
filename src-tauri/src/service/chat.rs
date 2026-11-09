@@ -3,7 +3,7 @@
 
 use super::Services;
 use super::access;
-use super::agent::{self, TurnOutcome};
+use super::agent::{self, Budget, TurnOutcome};
 use super::web;
 use crate::attachments::{self, Attachment};
 use crate::auth::Principal;
@@ -12,9 +12,10 @@ use crate::db::{self, Conversation, Db, Message, Project, SKILL_EVENT, SOURCES_E
 use crate::engine::Engine;
 use crate::error::{AppError, AppResult, invalid};
 use crate::license::{Entitlements, Feature};
-use crate::skills::loader::GENERAL_CHAT;
+use crate::skills::loader::{AGENT, GENERAL_CHAT};
 use crate::skills::router::{self, RouteContext};
 use crate::skills::{MAX_PROJECT_SKILLS, MAX_TOOLS_PER_TURN, Skill, prompt};
+use crate::tools::web::{WebSession, links_in};
 use crate::tools::{self, ToolCtx, ToolKind, ToolSpec};
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -314,7 +315,15 @@ pub async fn send_message(
     // A skill may switch thinking off for speed, never on against the user's choice.
     let think = think && skills.first().and_then(|s| s.output.think).unwrap_or(true);
 
-    // Tools come from the skills, only when the user allowed folders; the prompt then names them.
+    // Online search: skipped for file-changing skills and messages limited to folders; off means
+    // no network at all. Dedicated file skills (organizer, cleaner…) skip the search; general chat
+    // may change files on request too, but the search decision already leaves file questions alone.
+    let proposes = |t: &String| tools::get(t).is_some_and(|spec| spec.kind == ToolKind::Propose);
+    let file_task = skills.iter().any(|s| s.id != GENERAL_CHAT && s.tools.iter().any(proposes));
+    let can_search = web && svc.web.is_some() && options.folder_ids.is_none() && !file_task;
+
+    // Tools come from the skills: file tools only when the user allowed folders, web tools only
+    // while online search may run; the prompt then names them.
     let scope = Arc::new(access::scope_limited(svc, p, options.folder_ids.as_deref())?);
     let mut tool_names: Vec<&str> = Vec::new();
     for name in skills.iter().flat_map(|s| s.tools.iter()) {
@@ -323,12 +332,12 @@ pub async fn send_message(
         }
     }
     // Models without tool support answer without tools rather than failing.
-    let mut tools = if scope.is_empty() || !svc.engine.supports("tools") {
-        vec![]
-    } else {
-        tools::select(&tool_names, &ent, &scope)
-    };
+    let mut tools =
+        if svc.engine.supports("tools") { tools::select(&tool_names, &ent, &scope, can_search) } else { vec![] };
     tools.truncate(MAX_TOOLS_PER_TURN);
+    // A reply with the web tools (the agent) searches itself; any other gets the research step.
+    let web_tools = tools.iter().any(|t| t.kind == ToolKind::Web);
+    let budget = if skills.iter().any(|s| s.id == AGENT) { Budget::AGENT } else { Budget::REPLY };
     let skill_refs: Vec<&Skill> = skills.iter().collect();
     let project_prompt = project.as_ref().map(|p| (p.name.as_str(), p.instructions.as_str()));
     let policy = crate::ext::policy(svc, p)?;
@@ -358,19 +367,14 @@ pub async fn send_message(
     let model = svc.engine.model();
     let busy = Generating::start(svc);
 
-    // Online search: the app looks things up first, so it works with any model. Skipped for
-    // file-changing skills and messages limited to folders; off means no network at all.
+    // Online search without the web tools: the app looks things up first, so it works with any model.
     let mut prefix_rows = skill_rows;
-    // Dedicated file skills (organizer, cleaner…) skip the search; general chat may change files
-    // on request too, but the search decision already leaves file questions alone.
-    let proposes = |t: &String| tools::get(t).is_some_and(|spec| spec.kind == ToolKind::Propose);
-    let file_task = skills.iter().any(|s| s.id != GENERAL_CHAT && s.tools.iter().any(proposes));
-    let can_search = web && svc.web.is_some() && options.folder_ids.is_none() && !file_task;
     // What the app adds about online search goes at the end of the latest message the model
     // sees (not the stored one): next to the question, it outweighs earlier replies in the chat.
     let mut web_note = String::new();
     let mut searched = false;
     if can_search
+        && !web_tools
         && !text.trim().is_empty()
         && let Some(found) = web::research(svc, &model, num_ctx, &history, &text, emit, &slot.cancel).await
     {
@@ -388,7 +392,9 @@ pub async fn send_message(
             });
         }
     }
-    if searched {
+    if web_tools {
+        web_note.push_str(web::CAPABILITY_TOOLS);
+    } else if searched {
         web_note.push_str(web::CAPABILITY_SEARCHED);
     } else if can_search {
         web_note.push_str(web::CAPABILITY_ON);
@@ -403,8 +409,14 @@ pub async fn send_message(
     {
         last.content.push_str(&web::note(&web_note));
     }
-    let ctx = ToolCtx { scope, policy };
-    let outcome = agent::run_turn(svc, &ent, &ctx, &model, messages, num_ctx, think, &tools, emit, &slot.cancel).await;
+    // Pages the web tools may read besides search results: the links the user wrote.
+    let web_session = svc.web.clone().filter(|_| web_tools).map(|w| {
+        let links = history.iter().filter(|m| m.role == "user").flat_map(|m| links_in(&m.content)).collect();
+        WebSession::new(w, links, slot.cancel.clone())
+    });
+    let ctx = ToolCtx { scope, policy, web: web_session };
+    let outcome =
+        agent::run_turn(svc, &ent, &ctx, &model, messages, num_ctx, think, &tools, budget, emit, &slot.cancel).await;
     let (saved, error) = persist_turn(svc, p, conversation_id, outcome, prefix_rows)?;
 
     // A proposal ends the reply; the edition decides what follows (it may apply it at once).
@@ -457,7 +469,19 @@ pub(crate) fn persist_turn(
     outcome: TurnOutcome,
     skill_rows: Vec<ToolEventRow>,
 ) -> AppResult<(Option<Message>, Option<String>)> {
-    let TurnOutcome { content, thinking, mut events, proposal, error, .. } = outcome;
+    let TurnOutcome { content, thinking, mut events, proposal, sources, error, .. } = outcome;
+    let mut skill_rows = skill_rows;
+    if !sources.is_empty() {
+        skill_rows.push(ToolEventRow {
+            seq: skill_rows.len() as i64,
+            name: SOURCES_EVENT.into(),
+            args: serde_json::json!({ "sources": sources }),
+            result: String::new(),
+            summary: String::new(),
+            ok: true,
+            duration_ms: 0,
+        });
+    }
     for e in &mut events {
         e.seq += skill_rows.len() as i64;
     }
