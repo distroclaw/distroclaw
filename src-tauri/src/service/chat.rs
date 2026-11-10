@@ -12,7 +12,7 @@ use crate::db::{self, Conversation, Db, Message, Project, SKILL_EVENT, SOURCES_E
 use crate::engine::Engine;
 use crate::error::{AppError, AppResult, invalid};
 use crate::license::{Entitlements, Feature};
-use crate::skills::loader::{AGENT, GENERAL_CHAT};
+use crate::skills::loader::{AGENT, GENERAL_CHAT, OLYMP};
 use crate::skills::router::{self, RouteContext};
 use crate::skills::{MAX_PROJECT_SKILLS, MAX_TOOLS_PER_TURN, Skill, prompt};
 use crate::tools::web::{WebSession, links_in};
@@ -187,6 +187,9 @@ fn check_skill_ids(svc: &Services, ids: &[String]) -> AppResult<Vec<String>> {
             continue;
         }
         let Some(s) = set.get(id) else { return invalid(format!("Unknown skill \"{id}\".")) };
+        if s.id == OLYMP && !svc.store.read(crate::olymp::addon::installed)? {
+            return invalid("Olymp isn't installed. An admin can install it in Settings › Olymp.");
+        }
         if ent.edition < s.edition || s.triggers.feature.is_some_and(|f| !ent.allows(f)) {
             return Err(AppError::Upgrade(s.triggers.feature.unwrap_or(Feature::CustomSkills)));
         }
@@ -277,14 +280,26 @@ pub async fn send_message(
     }
 
     let ent = svc.entitlements()?;
-    let (conv, project, disabled) = svc.store.read(|db| {
+    let (conv, project, mut disabled, online, files_in_chat, olymp_installed) = svc.store.read(|db| {
         let conv = db.get_conversation(conversation_id, &p.user_id)?.ok_or(CONVERSATION)?;
         let project = match &conv.project_id {
             Some(id) => db.get_project(id, &p.user_id)?,
             None => None,
         };
-        AppResult::Ok((conv, project, db.disabled_skill_ids(&p.user_id)?))
+        let online = db.get_user_setting(&p.user_id, "web_search")?.as_deref() == Some("on");
+        let files_in_chat = db.get_messages(conversation_id)?.iter().any(has_local_content);
+        let olymp_installed = crate::olymp::addon::installed(db)?;
+        AppResult::Ok((conv, project, db.disabled_skill_ids(&p.user_id)?, online, files_in_chat, olymp_installed))
     })?;
+    // Olymp is an add-on: until it is installed, nothing picks it, and asking for it says so.
+    if !olymp_installed {
+        let asked = options.skill_id.as_deref() == Some(OLYMP)
+            || text.split_whitespace().next().is_some_and(|w| w.eq_ignore_ascii_case("/olymp"));
+        if asked {
+            return invalid("Olymp isn't installed. An admin can install it in Settings › Olymp.");
+        }
+        disabled.insert(OLYMP.to_string());
+    }
 
     // Which skills shape this reply, and the message without its slash command.
     let (skills, text) = {
@@ -296,12 +311,30 @@ pub async fn send_message(
             project_skill_ids: project.as_ref().map(|p| p.skill_ids.as_slice()).unwrap_or(&[]),
             conversation_skill_id: conv.skill_id.as_deref(),
             explicit_skill_id: options.skill_id.as_deref(),
+            online,
         };
         let routed = router::route(&ctx, &set, &ent, &disabled);
         let picked: Vec<Skill> = routed.skills.into_iter().cloned().collect();
         let stripped = if routed.text.trim().is_empty() { text.clone() } else { routed.text };
         (picked, stripped)
     };
+
+    // Olymp researches alone, only with Online search on, and never in a chat that holds the
+    // user's files (the model sees them, so they could end up in a search). Refused before
+    // anything is saved.
+    let is_olymp = skills.iter().any(|s| s.id == OLYMP);
+    let skills: Vec<Skill> = if is_olymp { skills.into_iter().filter(|s| s.id == OLYMP).collect() } else { skills };
+    if is_olymp && (!online || svc.olymp.is_none()) {
+        return invalid("Olymp searches online. Turn on Search, then send again.");
+    }
+    if is_olymp && (files_in_chat || !attachments.is_empty()) {
+        return invalid(
+            "Olymp can't search the web in a chat that contains your files, so they can never end up in a search. \
+             Start a new chat for the research.",
+        );
+    }
+    let olymp_config =
+        if is_olymp { Some(svc.store.read(|db| crate::olymp::settings::load(db, &p.user_id))?) } else { None };
 
     let TurnContext { history, global, num_ctx, think, web } = svc.store.write(|db| {
         let previous = db.get_messages(conversation_id)?;
@@ -321,6 +354,8 @@ pub async fn send_message(
     let proposes = |t: &String| tools::get(t).is_some_and(|spec| spec.kind == ToolKind::Propose);
     let file_task = skills.iter().any(|s| s.id != GENERAL_CHAT && s.tools.iter().any(proposes));
     let can_search = web && svc.web.is_some() && options.folder_ids.is_none() && !file_task;
+    // Olymp may research with folders allowed: the web closes once a local file is opened.
+    let can_research = web && svc.olymp.is_some();
 
     // Tools come from the skills: file tools only when the user allowed folders, web tools only
     // while online search may run; the prompt then names them.
@@ -332,12 +367,21 @@ pub async fn send_message(
         }
     }
     // Models without tool support answer without tools rather than failing.
+    let online_tools = if is_olymp { can_research } else { can_search };
     let mut tools =
-        if svc.engine.supports("tools") { tools::select(&tool_names, &ent, &scope, can_search) } else { vec![] };
+        if svc.engine.supports("tools") { tools::select(&tool_names, &ent, &scope, online_tools) } else { vec![] };
     tools.truncate(MAX_TOOLS_PER_TURN);
     // A reply with the web tools (the agent) searches itself; any other gets the research step.
     let web_tools = tools.iter().any(|t| t.kind == ToolKind::Web);
-    let budget = if skills.iter().any(|s| s.id == AGENT) { Budget::AGENT } else { Budget::REPLY };
+    // Olymp with its tools researches itself; with a model that cannot call tools, the app does.
+    let research_tools = tools.iter().any(|t| t.kind == ToolKind::Research);
+    let budget = if is_olymp {
+        Budget::OLYMP
+    } else if skills.iter().any(|s| s.id == AGENT) {
+        Budget::AGENT
+    } else {
+        Budget::REPLY
+    };
     let skill_refs: Vec<&Skill> = skills.iter().collect();
     let project_prompt = project.as_ref().map(|p| (p.name.as_str(), p.instructions.as_str()));
     let policy = crate::ext::policy(svc, p)?;
@@ -373,7 +417,30 @@ pub async fn send_message(
     // sees (not the stored one): next to the question, it outweighs earlier replies in the chat.
     let mut web_note = String::new();
     let mut searched = false;
+    // Pages the web tools may read besides search results: the links the user wrote.
+    let user_links: Vec<String> =
+        history.iter().filter(|m| m.role == "user").flat_map(|m| links_in(&m.content)).collect();
+    let olymp_session = match (&svc.olymp, olymp_config) {
+        (Some(o), Some(cfg)) if can_research => {
+            Some(crate::olymp::Session::new(o.clone(), cfg, user_links.clone(), slot.cancel.clone()))
+        }
+        _ => None,
+    };
+    if let Some(o) = &olymp_session {
+        emit(o.status("starting", "Olymp is starting its research"));
+    }
+    if let Some(o) = olymp_session.as_ref().filter(|_| !research_tools)
+        && !text.trim().is_empty()
+    {
+        let first = prefix_rows.len() as i64;
+        let prepared =
+            crate::olymp::pipeline::run(svc, o, &model, num_ctx, &history, &text, emit, &slot.cancel, first).await;
+        searched = true;
+        web_note.push_str(&prepared.note);
+        prefix_rows.extend(prepared.rows);
+    }
     if can_search
+        && !is_olymp
         && !web_tools
         && !text.trim().is_empty()
         && let Some(found) = web::research(svc, &model, num_ctx, &history, &text, emit, &slot.cancel).await
@@ -392,7 +459,9 @@ pub async fn send_message(
             });
         }
     }
-    if web_tools {
+    if research_tools {
+        web_note.push_str(crate::olymp::CAPABILITY);
+    } else if web_tools {
         web_note.push_str(web::CAPABILITY_TOOLS);
     } else if searched {
         web_note.push_str(web::CAPABILITY_SEARCHED);
@@ -409,14 +478,15 @@ pub async fn send_message(
     {
         last.content.push_str(&web::note(&web_note));
     }
-    // Pages the web tools may read besides search results: the links the user wrote.
-    let web_session = svc.web.clone().filter(|_| web_tools).map(|w| {
-        let links = history.iter().filter(|m| m.role == "user").flat_map(|m| links_in(&m.content)).collect();
-        WebSession::new(w, links, slot.cancel.clone())
-    });
-    let ctx = ToolCtx { scope, policy, web: web_session };
-    let outcome =
+    let web_session =
+        svc.web.clone().filter(|_| web_tools).map(|w| WebSession::new(w, user_links, slot.cancel.clone()));
+    let ctx = ToolCtx { scope, policy, web: web_session, olymp: olymp_session };
+    let mut outcome =
         agent::run_turn(svc, &ent, &ctx, &model, messages, num_ctx, think, &tools, budget, emit, &slot.cancel).await;
+    if is_olymp {
+        // Every citation left points to a source Olymp found or read.
+        outcome.content = crate::olymp::cite::clean(&outcome.content, outcome.sources.len());
+    }
     let (saved, error) = persist_turn(svc, p, conversation_id, outcome, prefix_rows)?;
 
     // A proposal ends the reply; the edition decides what follows (it may apply it at once).
@@ -442,6 +512,18 @@ pub async fn send_message(
         Some(message) => Err(AppError::Internal(message)),
         None => Ok(saved),
     }
+}
+
+/// Whether a message brings the user's own content into the chat: attachments, or a file tool
+/// that opened something on this computer.
+fn has_local_content(m: &Message) -> bool {
+    !m.attachments.is_empty()
+        || m.tool_events.iter().any(|e| match e {
+            ChatEvent::ToolCall { name, .. } => {
+                tools::get(name).is_none_or(|t| !matches!(t.kind, ToolKind::Web | ToolKind::Research))
+            }
+            _ => false,
+        })
 }
 
 /// What a reply ran with: the edition's follow-up turns (after an applied proposal) reuse it.

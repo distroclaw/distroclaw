@@ -195,7 +195,9 @@ export function Composer(props: Props) {
               >
                 <span className="mono">{s.slash}</span>
                 <b>{s.title}</b>
-                <span className="muted">{s.description}</span>
+                <span className="muted">
+                  {s.id === "olymp" && !webSearch ? "Turn on Search first: Olymp researches online." : s.description}
+                </span>
               </button>
             ))}
           </div>

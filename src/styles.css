@@ -679,3 +679,17 @@ button.badge[aria-busy="true"] { cursor: progress; }
 .msg-actions { display: flex; gap: 4px; margin-top: 6px; opacity: 0; transition: opacity 0.15s; }
 .msg.assistant:hover .msg-actions, .msg.assistant:focus-within .msg-actions, .msg-actions:focus-within { opacity: 1; }
 .msg-actions .icon-btn { font-size: 12px; }
+
+/* Olymp's progress line: the step it is on, then how far it got. */
+.research > span { min-width: 0; }
+.research b { color: var(--text); font-weight: 600; }
+.research-count { color: var(--muted); }
+.research-intro { margin-bottom: 12px; }
+.research-sources { gap: 6px; }
+.research-sources li.research-source { display: flex; flex-direction: row; align-items: center; gap: 10px; }
+.research-source .skill-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+/* Olymp's card in Settings before it is installed. */
+.olymp-card { display: flex; flex-direction: column; gap: 10px; padding: 18px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg-soft); }
+.olymp-card h3 { margin: 0; font-size: 18px; }
+.olymp-tagline { margin: 0; color: var(--muted); }
+.olymp-points { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }

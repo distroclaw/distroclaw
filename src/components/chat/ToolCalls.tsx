@@ -42,6 +42,17 @@ export function describeTool(name: string, args: Record<string, unknown>): strin
       return str(args.query) ? `Searched the web for “${str(args.query)}”` : "Searched the web";
     case "read_web_page":
       return `Read ${domainOf(args.url) || "a web page"}`;
+    case "olymp_search": {
+      const q = str(args.query);
+      const type = str(args.filetype).toUpperCase();
+      const where = type ? `${type} files` : ({ news: "news", papers: "papers", code: "developer sources" } as Record<string, string>)[str(args.focus)] ?? "the web";
+      return q ? `Searched ${where} for “${q}”` : `Searched ${where}`;
+    }
+    case "olymp_read": {
+      const source = args.source;
+      const n = typeof source === "number" ? String(source) : /^\s*\d+\s*$/.test(str(source)) ? str(source).trim() : "";
+      return n ? `Opened result [${n}]` : `Opened ${domainOf(source) || "a result"}`;
+    }
     default: {
       const label = ext.toolLabels[name];
       return typeof label === "string" ? label : name.replace(/_/g, " ");

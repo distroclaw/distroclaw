@@ -8,13 +8,15 @@ import { AccessPanel } from "./settings/AccessPanel";
 import { SkillsPanel } from "./settings/SkillsPanel";
 import { CONTEXT_STOPS, DEFAULT_CONTEXT, ModelPanel } from "./settings/ModelPanel";
 import { AboutPanel } from "./settings/AboutPanel";
+import { ResearchPanel } from "./settings/ResearchPanel";
 
-type Tab = "general" | "access" | "skills" | "model" | "about";
+type Tab = "general" | "access" | "skills" | "research" | "model" | "about";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "general", label: "General" },
   { id: "access", label: "Access" },
   { id: "skills", label: "Skills" },
+  { id: "research", label: "Olymp" },
   { id: "model", label: "Model" },
   { id: "about", label: "About" },
 ];
@@ -167,6 +169,9 @@ export function SettingsDialog({ engine, switchingModel, onSwitchModel, theme, o
       </TabPanel>
       <TabPanel id="skills" active={tab === "skills"}>
         <SkillsPanel onTest={onTestSkill} onChanged={onChanged} />
+      </TabPanel>
+      <TabPanel id="research" active={tab === "research"}>
+        <ResearchPanel webSearch={webSearch} onChanged={onChanged} />
       </TabPanel>
       <TabPanel id="model" active={tab === "model"}>
         <ModelPanel

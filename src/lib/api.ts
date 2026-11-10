@@ -152,6 +152,32 @@ export interface Source {
   url: string;
 }
 
+/** Olymp's progress while it researches: what it is doing and how far it got. Not saved. */
+export interface ResearchStatus {
+  type: "research";
+  /** starting | planning | searching | reading | thinking */
+  stage: string;
+  detail: string;
+  searches: number;
+  reads: number;
+  sources: number;
+}
+
+/** Olymp, the add-on: installed or not, the services the app set up, Docker, and the running setup. */
+export interface OlympStatus {
+  installed: boolean;
+  services: boolean;
+  /** missing | stopped | ready */
+  docker: string;
+  task: { state: "idle" | "working" | "done" | "error"; message: string };
+}
+
+/** Whether the local SearXNG and Crawl4AI answer: ok, off, not_running, no_json or error. */
+export interface OlympCheck {
+  searxng: string;
+  crawl4ai: string;
+}
+
 export type ChatEvent =
   | { type: "thinking"; delta: string }
   | { type: "token"; delta: string }
@@ -164,6 +190,7 @@ export type ChatEvent =
   | { type: "toolResult"; id: string; ok: boolean; summary: string }
   /** The reply so far was saved mid-send; what follows streams into a new bubble. */
   | { type: "messageSaved"; message: Message }
+  | ResearchStatus
   | { type: "error"; message: string };
 
 /** A streamed event the core does not handle itself; kept with the live reply for the extension's message addon. */
@@ -259,6 +286,15 @@ export const api = {
   revealDataFolder: () => invoke<void>("reveal_data_folder"),
   getSetting: (key: string) => invoke<string | null>("get_setting", { key }),
   setSetting: (key: string, value: string) => invoke<void>("set_setting", { key, value }),
+  /** Whether the local SearXNG and Crawl4AI Olymp may use are running. */
+  olympCheck: () => invoke<OlympCheck>("olymp_check"),
+  olympStatus: () => invoke<OlympStatus>("olymp_status"),
+  /** Installs Olymp (admins only); it then shows in the skill list and the composer. */
+  olympInstall: () => invoke<void>("olymp_install"),
+  /** Removes Olymp, its settings and keys, and the services the app set up. */
+  olympUninstall: () => invoke<void>("olymp_uninstall"),
+  /** Sets up SearXNG and Crawl4AI with Docker in the background; follow it with olympStatus. */
+  olympStartServices: () => invoke<void>("olymp_start_services"),
   listConversations: () => invoke<Conversation[]>("list_conversations"),
   createConversation: (projectId: string | null = null) =>
     invoke<Conversation>("create_conversation", { projectId }),

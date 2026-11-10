@@ -40,6 +40,9 @@ pub struct Services {
     pub(crate) skills: RwLock<SkillSet>,
     /// Online search; None in tests unless a test sets up a fake site.
     pub(crate) web: Option<crate::web::Web>,
+    /// Olymp, the research agent: clients, robots.txt cache and pacing for the life of the app.
+    /// None in tests unless a test sets up a fake site.
+    pub(crate) olymp: Option<Arc<crate::olymp::Olymp>>,
     /// What the edition keeps for the life of the app.
     #[allow(dead_code)] // empty in editions that keep nothing
     pub(crate) ext: crate::ext::State,
@@ -60,6 +63,7 @@ impl Services {
             timeouts: Timeouts::default(),
             skills,
             web: Some(crate::web::Web::new(crate::web::WebConfig::default())),
+            olymp: Some(Arc::new(crate::olymp::Olymp::for_app())),
             ext,
         }
     }
@@ -104,6 +108,7 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let mut svc = Services::new(Store::open_in_memory().unwrap(), Engine::new(Mode::External(url.into())), dir);
         svc.web = None;
+        svc.olymp = None;
         svc
     }
 

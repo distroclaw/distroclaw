@@ -53,6 +53,14 @@ pub enum ChatEvent {
     Sources {
         sources: Vec<Source>,
     },
+    /// Olymp's progress while it researches: what it is doing and how far it got. Not saved.
+    Research {
+        stage: String,
+        detail: String,
+        searches: u32,
+        reads: u32,
+        sources: u32,
+    },
 }
 
 /// A web page an answer is based on.

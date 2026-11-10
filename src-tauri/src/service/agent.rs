@@ -34,6 +34,8 @@ impl Budget {
     pub const REPLY: Self = Self { iterations: MAX_ITERATIONS, tool_chars: MAX_TURN_TOOL_CHARS, time: TURN_BUDGET };
     /// The agent searches, reads and searches again; about 8k tokens of results fit the default context.
     pub const AGENT: Self = Self { iterations: 10, tool_chars: 32_000, time: Duration::from_secs(600) };
+    /// Olymp researches across sources: a few more steps and results, the same time limit.
+    pub const OLYMP: Self = Self { iterations: 12, tool_chars: 36_000, time: Duration::from_secs(600) };
 }
 /// Only the newest user messages carry their images to the engine again; older ones name them.
 pub const IMAGE_HISTORY_TURNS: usize = 2;
@@ -124,7 +126,7 @@ pub(crate) async fn run_turn(
     cancel: &Cancel,
 ) -> TurnOutcome {
     let mut out = run_steps(svc, ent, ctx, model, messages, num_ctx, think, tools, budget, emit, cancel).await;
-    out.sources = ctx.web.as_ref().map(|w| w.sources()).unwrap_or_default();
+    out.sources = ctx.sources();
     out
 }
 
@@ -174,6 +176,9 @@ async fn run_steps(
         out.error = step.error;
         // On the last round no tools were offered, so any call the model still makes is dropped.
         if out.cancelled || out.error.is_some() || step.tool_calls.is_empty() || last {
+            if ctx.olymp.is_some() && out.content.trim().is_empty() && !out.cancelled && out.error.is_none() {
+                olymp_answer(svc, ctx, model, &mut messages, num_ctx, think, emit, cancel, &mut out).await;
+            }
             return out;
         }
 
@@ -191,6 +196,11 @@ async fn run_steps(
             let name = call.function.name.clone();
             let args = call.function.arguments.clone();
             emit(ChatEvent::ToolCall { id: id.clone(), name: name.clone(), args: args.clone() });
+            // Olymp's progress line follows each step.
+            if let Some(o) = &ctx.olymp {
+                let (stage, detail) = crate::olymp::describe_call(&name, &args);
+                emit(o.status(stage, detail));
+            }
             let started = Instant::now();
             let outcome = if !names.contains(name.as_str()) {
                 ToolOutcome::Err { message: format!("{name} is not available in this reply.") }
@@ -230,9 +240,13 @@ async fn run_steps(
             };
             tool_chars += result.len();
             emit(ChatEvent::ToolResult { id, ok, summary: summary.clone() });
-            if let Some(found) = ctx.web.as_ref().map(|w| w.sources()).filter(|s| s.len() > sources_shown) {
+            let found = ctx.sources();
+            if found.len() > sources_shown {
                 sources_shown = found.len();
                 emit(ChatEvent::Sources { sources: found });
+            }
+            if let Some(o) = &ctx.olymp {
+                emit(o.status("thinking", "Weighing what it found"));
             }
             out.events.push(ToolEventRow {
                 seq,
@@ -257,4 +271,47 @@ async fn run_steps(
         }
     }
     out
+}
+
+/// Olymp researched but the model ended without an answer (a small model may call a tool on the
+/// round that offers none, or say nothing): one more round, without tools, asks for the answer.
+#[allow(clippy::too_many_arguments)]
+async fn olymp_answer(
+    svc: &Services,
+    ctx: &ToolCtx,
+    model: &str,
+    messages: &mut Vec<ChatMessage<'_>>,
+    num_ctx: u32,
+    think: bool,
+    emit: Emit<'_>,
+    cancel: &Cancel,
+    out: &mut TurnOutcome,
+) {
+    let Some(o) = &ctx.olymp else { return };
+    emit(o.status("writing", "Writing the answer"));
+    messages.push(ChatMessage::new(
+        "user",
+        "Answer my question now from the results above, without calling any tool. Cite each fact as [n] \
+         with the result's number. If the results do not answer it, say what you found and what is missing."
+            .to_string(),
+    ));
+    let request = ChatRequest {
+        model,
+        messages,
+        stream: true,
+        think: svc.engine.think_flag(think),
+        options: ChatOptions { num_ctx },
+        tools: &[],
+        format: None,
+    };
+    let step = stream_once(&svc.engine, &request, svc.timeouts, emit, cancel).await;
+    if !step.thinking.is_empty() {
+        if !out.thinking.is_empty() {
+            out.thinking.push('\n');
+        }
+        out.thinking.push_str(&step.thinking);
+    }
+    out.content = step.content;
+    out.cancelled = step.cancelled;
+    out.error = step.error;
 }

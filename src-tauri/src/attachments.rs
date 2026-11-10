@@ -18,6 +18,14 @@ pub const MAX_NAME_CHARS: usize = 255;
 const MAX_DOCX_XML_BYTES: u64 = 16 * 1024 * 1024;
 /// `DistroClaw --read-pdf`: the PDF reader process (see `pdf_text`).
 pub const PDF_READER_FLAG: &str = "--read-pdf";
+/// `DistroClaw --read-sheet`: the spreadsheet reader process (see `sheet_text`).
+pub const SHEET_READER_FLAG: &str = "--read-sheet";
+/// What a spreadsheet contributes at most: sheets, rows per sheet and cells per row.
+const SHEET_MAX_SHEETS: usize = 20;
+const SHEET_MAX_ROWS: usize = 5_000;
+const SHEET_MAX_COLS: usize = 60;
+/// Decompressed slide XML of a presentation we are willing to read, all slides together.
+const MAX_PPTX_XML_BYTES: u64 = 16 * 1024 * 1024;
 /// How long reading one PDF may take before its process is ended (the UI waits 30 s).
 const PDF_TIMEOUT: Duration = Duration::from_secs(25);
 /// Memory the PDF reader process may use before it is ended.
@@ -55,8 +63,11 @@ pub fn extract(name: &str, bytes: &[u8]) -> Result<ExtractedText, String> {
     let text = match ext.as_str() {
         "pdf" => pdf_text(name, bytes)?,
         "docx" => docx_text(bytes).map_err(|e| format!("Could not read \"{name}\": {e}"))?,
-        _ => plain_text(bytes)
-            .ok_or_else(|| format!("\"{name}\" is not a supported document. Use PDF, DOCX or a text file."))?,
+        "xlsx" | "xlsm" | "xls" | "ods" => sheet_text(name, bytes)?,
+        "pptx" => pptx_text(bytes).map_err(|e| format!("Could not read \"{name}\": {e}"))?,
+        _ => plain_text(bytes).ok_or_else(|| {
+            format!("\"{name}\" is not a supported document. Use PDF, Word, Excel, PowerPoint or a text file.")
+        })?,
     };
     let text = tidy(&text);
     if text.is_empty() {
@@ -78,13 +89,17 @@ enum PdfFailure {
 
 impl PdfFailure {
     fn message(&self, name: &str) -> String {
+        self.message_for("PDF", name)
+    }
+
+    fn message_for(&self, what: &str, name: &str) -> String {
         let why = match self {
             Self::Unreadable(e) => e.as_str(),
             Self::Damaged => "the file seems damaged.",
             Self::TooSlow => "it takes too long to read. Try a smaller file, or copy the text out of it.",
             Self::TooMuchMemory => "it needs too much memory to read. Try a smaller file, or copy the text out of it.",
         };
-        format!("Could not read PDF \"{name}\": {why}")
+        format!("Could not read {what} \"{name}\": {why}")
     }
 }
 
@@ -109,6 +124,72 @@ fn pdf_text(name: &str, bytes: &[u8]) -> Result<String, String> {
     })
 }
 
+/// Spreadsheets are read like PDFs, in a process of their own (`SHEET_READER_FLAG`): a crafted
+/// file can make the reader allocate a lot, and that must not take the app with it.
+fn sheet_text(name: &str, bytes: &[u8]) -> Result<String, String> {
+    let read = if cfg!(test) {
+        read_sheet(bytes)
+    } else {
+        std::env::current_exe().map_err(|e| PdfFailure::Unreadable(e.to_string())).and_then(|exe| {
+            let mut cmd = Command::new(exe);
+            cmd.arg(SHEET_READER_FLAG);
+            run_pdf_reader(cmd, bytes, PDF_TIMEOUT, PDF_MAX_MEMORY)
+        })
+    };
+    read.map_err(|f| {
+        log::warn!("could not read the spreadsheet {name}: {f:?}");
+        f.message_for("spreadsheet", name)
+    })
+}
+
+/// Reads a spreadsheet here: every sheet as tab-separated rows under its name.
+fn read_sheet(bytes: &[u8]) -> Result<String, PdfFailure> {
+    match std::panic::catch_unwind(|| sheet_to_text(bytes)) {
+        Ok(Ok(text)) => Ok(text),
+        Ok(Err(e)) => Err(PdfFailure::Unreadable(e)),
+        Err(_) => Err(PdfFailure::Damaged),
+    }
+}
+
+fn sheet_to_text(bytes: &[u8]) -> Result<String, String> {
+    use calamine::{Data, Reader, open_workbook_auto_from_rs};
+    let mut book =
+        open_workbook_auto_from_rs(std::io::Cursor::new(bytes)).map_err(|_| "not a spreadsheet".to_string())?;
+    let cell = |d: &Data| match d {
+        Data::Empty => String::new(),
+        Data::Float(f) if f.fract() == 0.0 && f.abs() < 1e15 => format!("{}", *f as i64),
+        other => other.to_string().replace(['\t', '\n'], " "),
+    };
+    // Enough text for the per-document cap, counted in bytes (a character is at least one).
+    let budget = MAX_DOC_CHARS * 4;
+    let mut out = String::new();
+    for name in book.sheet_names().into_iter().take(SHEET_MAX_SHEETS) {
+        let Ok(range) = book.worksheet_range(&name) else { continue };
+        out.push_str(&format!("## Sheet: {name}\n"));
+        for row in range.rows().take(SHEET_MAX_ROWS) {
+            let mut cells: Vec<String> = row.iter().take(SHEET_MAX_COLS).map(cell).collect();
+            while cells.last().is_some_and(String::is_empty) {
+                cells.pop();
+            }
+            if cells.is_empty() {
+                continue;
+            }
+            out.push_str(&cells.join("\t"));
+            out.push('\n');
+            if out.len() > budget {
+                return Ok(out);
+            }
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// The spreadsheet reader process: like `pdf_reader_main`, for xlsx, xls and ods.
+pub fn sheet_reader_main() -> i32 {
+    reader_main(read_sheet)
+}
+
 /// Reads a PDF here. `pdf-extract` panics on some malformed files; that counts as damaged.
 fn read_pdf(bytes: &[u8]) -> Result<String, PdfFailure> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pdf_extract::extract_text_from_mem(bytes))) {
@@ -122,6 +203,11 @@ fn read_pdf(bytes: &[u8]) -> Result<String, PdfFailure> {
 /// `MAX_PIPE_BYTES`) with exit code 0; otherwise the reason goes to stderr with exit code 1, or
 /// the exit code is 2 for a damaged file.
 pub fn pdf_reader_main() -> i32 {
+    reader_main(read_pdf)
+}
+
+/// A reader process: the file on stdin, its text on stdout (see `pdf_reader_main`).
+fn reader_main(read: fn(&[u8]) -> Result<String, PdfFailure>) -> i32 {
     let mut bytes = Vec::new();
     if let Err(e) = std::io::stdin().lock().take(PDF_MAX_INPUT + 1).read_to_end(&mut bytes) {
         eprint!("{e}");
@@ -131,7 +217,7 @@ pub fn pdf_reader_main() -> i32 {
         eprint!("the file is larger than {} MB.", PDF_MAX_INPUT / 1_048_576);
         return 1;
     }
-    match read_pdf(&bytes) {
+    match read(&bytes) {
         Ok(text) => {
             let end = text.floor_char_boundary(process::MAX_PIPE_BYTES);
             let mut out = std::io::stdout().lock();
@@ -249,6 +335,54 @@ fn docx_text(bytes: &[u8]) -> Result<String, String> {
         .read_to_string(&mut xml)
         .map_err(|e| e.to_string())?;
     Ok(docx_xml_to_text(&xml))
+}
+
+/// A PowerPoint presentation's text, slide by slide.
+fn pptx_text(bytes: &[u8]) -> Result<String, String> {
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
+    let mut slides: Vec<(u32, String)> = zip
+        .file_names()
+        .filter_map(|n| {
+            let num = n.strip_prefix("ppt/slides/slide")?.strip_suffix(".xml")?.parse().ok()?;
+            Some((num, n.to_string()))
+        })
+        .collect();
+    if slides.is_empty() {
+        return Err("not a PowerPoint presentation".into());
+    }
+    slides.sort();
+    let mut budget = MAX_PPTX_XML_BYTES;
+    let mut out = String::new();
+    for (num, name) in slides {
+        if budget == 0 {
+            break;
+        }
+        let mut xml = String::new();
+        let read = zip.by_name(&name).map_err(|e| e.to_string())?.take(budget).read_to_string(&mut xml);
+        read.map_err(|e| e.to_string())?;
+        budget = budget.saturating_sub(xml.len() as u64);
+        out.push_str(&format!("## Slide {num}\n{}\n", slide_xml_to_text(&xml)));
+    }
+    Ok(out)
+}
+
+/// The text runs (`<a:t>`) of a slide, one paragraph (`</a:p>`) per line.
+fn slide_xml_to_text(xml: &str) -> String {
+    let mut out = String::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find('<') {
+        let Some(end) = rest[start..].find('>') else { break };
+        let tag = &rest[start + 1..start + end];
+        rest = &rest[start + end + 1..];
+        if tag == "a:t" || tag.starts_with("a:t ") {
+            let close = rest.find("</a:t>").unwrap_or(rest.len());
+            out.push_str(&unescape(&rest[..close]));
+            rest = &rest[close..];
+        } else if tag == "/a:p" {
+            out.push('\n');
+        }
+    }
+    out.trim_end().to_string()
 }
 
 /// Paragraphs become lines, tabs and breaks are kept, all other markup is dropped.
@@ -417,6 +551,60 @@ pub(crate) mod tests {
             w.finish().unwrap();
         }
         buf.into_inner()
+    }
+
+    fn zip_of(files: &[(&str, &str)]) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut buf);
+            for (name, body) in files {
+                w.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+                w.write_all(body.as_bytes()).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    #[test]
+    fn spreadsheets_become_tab_separated_sheets() {
+        let xlsx = crate::olymp::fetch::tests::xlsx_bytes();
+        let t = extract("prices.xlsx", &xlsx).unwrap().text;
+        assert_eq!(t, "## Sheet: Prices\nFuel\tCHF per litre\nDiesel\t1.89");
+        let ods = zip_of(&[
+            ("mimetype", "application/vnd.oasis.opendocument.spreadsheet"),
+            (
+                "META-INF/manifest.xml",
+                r#"<?xml version="1.0"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/></manifest:manifest>"#,
+            ),
+            (
+                "content.xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" office:version="1.2"><office:body><office:spreadsheet><table:table table:name="Rates"><table:table-row><table:table-cell office:value-type="string"><text:p>Canton</text:p></table:table-cell><table:table-cell office:value-type="string"><text:p>Rate</text:p></table:table-cell></table:table-row><table:table-row><table:table-cell office:value-type="string"><text:p>Basel</text:p></table:table-cell><table:table-cell office:value-type="float" office:value="12.5"><text:p>12.5</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#,
+            ),
+        ]);
+        let t = extract("rates.ods", &ods).unwrap().text;
+        assert!(t.contains("## Sheet: Rates") && t.contains("Basel\t12.5"), "{t}");
+        let err = extract("fake.xlsx", b"not a spreadsheet").unwrap_err();
+        assert!(err.starts_with("Could not read spreadsheet \"fake.xlsx\""), "{err}");
+    }
+
+    #[test]
+    fn presentations_are_read_slide_by_slide() {
+        let slide = |text: &str| {
+            format!(
+                r#"<p:sld xmlns:a="a" xmlns:p="p"><p:txBody><a:p><a:r><a:t>{text}</a:t></a:r></a:p><a:p><a:r><a:t xml:space="preserve">Q&amp;A</a:t></a:r></a:p></p:txBody></p:sld>"#
+            )
+        };
+        let pptx = zip_of(&[
+            ("ppt/slides/slide10.xml", &slide("Last")),
+            ("ppt/slides/slide2.xml", &slide("Second")),
+            ("ppt/slides/slide1.xml", &slide("Title")),
+            ("ppt/presentation.xml", "<p:presentation/>"),
+        ]);
+        let t = extract("deck.pptx", &pptx).unwrap().text;
+        assert_eq!(t, "## Slide 1\nTitle\nQ&A\n## Slide 2\nSecond\nQ&A\n## Slide 10\nLast\nQ&A");
+        assert!(extract("x.pptx", &zip_of(&[("a.txt", "x")])).unwrap_err().contains("not a PowerPoint"));
     }
 
     #[test]

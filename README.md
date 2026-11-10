@@ -13,6 +13,7 @@ DistroClaw Community is free and open source under the [Apache License 2.0](LICE
 - **Skills** for summarising, translating, document questions and image analysis. You can also write and import your own.
 - **Models:** DistroClaw suggests a model that fits your Mac. You can switch to any other model it can run and set the context length.
 - **Online search** (off by default): turn it on when you want answers with current information.
+- **Olymp** (`/olymp`, an add-on you install in Settings > Olymp; needs online search): researches across many sources at once (the web, news, research papers, developer sites and public PDF, Word and Excel files) and answers with numbered sources. It can also use a SearXNG and Crawl4AI you run on your Mac; see [docs/OLYMP.md](docs/OLYMP.md).
 - **Works offline** once a model is downloaded. No account, no telemetry.
 
 ## Privacy
@@ -20,7 +21,7 @@ DistroClaw Community is free and open source under the [Apache License 2.0](LICE
 Everything you create or open stays in DistroClaw's data folder on your Mac. The app goes online only in two cases:
 
 - to download a model you agreed to download from the DistroClaw model library
-- to search the web, if you turn on online search
+- to search the web, if you turn on online search (Olymp then also asks the news, paper and developer sources listed in the privacy notes)
 
 [docs/PRIVACY.md](docs/PRIVACY.md) lists exactly what is sent in each case.
 

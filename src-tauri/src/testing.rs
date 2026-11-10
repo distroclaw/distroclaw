@@ -116,13 +116,27 @@ impl FakeEngine {
 pub struct Reply {
     pub status: u16,
     pub content_type: &'static str,
-    pub body: String,
+    pub body: Vec<u8>,
     pub delay_ms: u64,
+    /// Extra response headers (Retry-After, Location…).
+    pub headers: Vec<(&'static str, String)>,
 }
 
 impl Reply {
     pub fn html(body: impl Into<String>) -> Self {
-        Self { status: 200, content_type: "text/html; charset=utf-8", body: body.into(), delay_ms: 0 }
+        Self::bytes("text/html; charset=utf-8", body.into().into_bytes())
+    }
+
+    pub fn json(body: impl Into<String>) -> Self {
+        Self::bytes("application/json", body.into().into_bytes())
+    }
+
+    pub fn text(content_type: &'static str, body: impl Into<String>) -> Self {
+        Self::bytes(content_type, body.into().into_bytes())
+    }
+
+    pub fn bytes(content_type: &'static str, body: Vec<u8>) -> Self {
+        Self { status: 200, content_type, body, delay_ms: 0, headers: vec![] }
     }
 }
 
@@ -166,14 +180,15 @@ impl FakeSite {
                     if reply.delay_ms > 0 {
                         tokio::time::sleep(Duration::from_millis(reply.delay_ms)).await;
                     }
+                    let extra: String = reply.headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
                     let head = format!(
-                        "HTTP/1.1 {} X\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        "HTTP/1.1 {} X\r\nContent-Type: {}\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n",
                         reply.status,
                         reply.content_type,
                         reply.body.len()
                     );
                     let _ = sock.write_all(head.as_bytes()).await;
-                    let _ = sock.write_all(reply.body.as_bytes()).await;
+                    let _ = sock.write_all(&reply.body).await;
                     let _ = sock.shutdown().await;
                 });
             }

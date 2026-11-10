@@ -34,7 +34,8 @@ The window's content security policy allows no remote content: no remote scripts
 | `skills/` | Skill files (Markdown with front matter): loading, routing a message to a skill, building the system prompt |
 | `access.rs` | Which folders the model may read, with checks against hidden and protected paths and symbolic-link escapes |
 | `web.rs` | Online search: providers, safe page fetching (public addresses only, size and time limits) and text extraction |
-| `attachments.rs` | Text from PDF, Word and text files; images for the model |
+| `olymp/` | Olymp, the research agent: search providers (`providers/`, one file each), result fusion (`fuse.rs`), robots.txt (`robots.rs`), page and document reading (`fetch.rs`), the local SearXNG and Crawl4AI client (`local.rs`), its tools (`tools.rs`), the step-by-step mode for models without tools (`pipeline.rs`) and citation cleanup (`cite.rs`) |
+| `attachments.rs` | Text from PDF, Word, Excel, OpenDocument, PowerPoint and text files (PDFs and spreadsheets in a process of their own); images for the model |
 | `db.rs`, `store.rs` | SQLite schema, migrations (with backups) and access |
 | `license.rs` | Editions and features; Community is always the free edition |
 | `ext.rs` | The extension point (see below) |
@@ -45,7 +46,7 @@ Built-in skills live in `src-tauri/skills/*.md`.
 
 1. The UI calls `send_message`. The backend stores the message and picks a skill: the one you chose, or one matched by the router.
 2. It builds the system prompt from your instructions, the project's instructions and the skill. If folders are attached, the read-only file tools are offered with them.
-3. If online search is on and the question needs current information, `service/web.rs` searches and adds the sources. The agent skill searches itself instead, with the web tools.
+3. If online search is on and the question needs current information, `service/web.rs` searches and adds the sources. The agent skill searches itself instead, with the web tools. Olymp (`/olymp`) runs alone with its own tools (`ToolKind::Research`) and budget; with a model that cannot call tools, `olymp/pipeline.rs` plans, searches and reads first. A file tool in an Olymp reply closes its web tools for the rest of the reply.
 4. The engine streams the answer. Tool calls run in the backend under the folder checks, and their results go back to the model.
 5. The reply is saved, and events stream to the UI as it is written.
 

@@ -1,5 +1,5 @@
 import { DragEvent, useCallback, useEffect, useRef, useState } from "react";
-import { AllowedFolder, api, Attachment, Conversation, EngineStatus, errorText, ExtEvent, formatGb, InstalledModel, Message, Project, SendOptions, SkillSummary, Source } from "../lib/api";
+import { AllowedFolder, api, Attachment, Conversation, EngineStatus, errorText, ExtEvent, formatGb, InstalledModel, Message, Project, ResearchStatus, SendOptions, SkillSummary, Source } from "../lib/api";
 import { FilesUpdater, Drafts, draftKey } from "../lib/drafts";
 import { usePendingAttachments } from "../lib/attachments";
 import { LiveReply } from "../lib/useThreads";
@@ -96,6 +96,8 @@ interface BubbleProps {
   sources?: Source[];
   /** Online search is running for this live reply. */
   searching?: boolean;
+  /** Olymp's progress while it researches for this live reply. */
+  research?: ResearchStatus | null;
   showSkillChips?: boolean;
   /** The saved message; absent while the reply streams. */
   saved?: Message;
@@ -104,7 +106,25 @@ interface BubbleProps {
   workspace: WorkspaceHandle;
 }
 
-function Bubble({ role, content, thinking, attachments = [], live, events = [], sources, searching = false, showSkillChips = false, saved, extEvents = [], workspace }: BubbleProps) {
+/** One line of Olymp's progress: the step it is on and how far it got. */
+function ResearchLine({ status }: { status: ResearchStatus }) {
+  const parts = [
+    status.searches > 0 && `${status.searches} search${status.searches === 1 ? "" : "es"}`,
+    status.reads > 0 && `${status.reads} read`,
+    status.sources > 0 && `${status.sources} source${status.sources === 1 ? "" : "s"}`,
+  ].filter(Boolean);
+  return (
+    <div className="searching research" role="status" aria-live="polite">
+      <GlobeIcon />
+      <span>
+        <b>Olymp</b> · {status.detail}
+        {parts.length > 0 && <span className="research-count"> · {parts.join(", ")}</span>}
+      </span>
+    </div>
+  );
+}
+
+function Bubble({ role, content, thinking, attachments = [], live, events = [], sources, searching = false, research = null, showSkillChips = false, saved, extEvents = [], workspace }: BubbleProps) {
   if (role === "user") {
     return (
       <div className="msg user">
@@ -115,7 +135,7 @@ function Bubble({ role, content, thinking, attachments = [], live, events = [], 
   }
   const seen = new Set<string>();
   const skills = events.flatMap((e) => (e.type === "skill" && !seen.has(e.id) && seen.add(e.id) ? [e] : []));
-  const waiting = !content && (searching || toolRowsPending(events));
+  const waiting = !content && (searching || !!research || toolRowsPending(events));
   return (
     <div className="msg assistant">
       {live && searching && (
@@ -123,6 +143,7 @@ function Bubble({ role, content, thinking, attachments = [], live, events = [], 
           <GlobeIcon /> Searching the web…
         </div>
       )}
+      {live && research && !content && <ResearchLine status={research} />}
       <ToolCalls events={events} live={live} />
       <Thinking text={thinking} live={!!live && !content} />
       {content ? (
@@ -247,7 +268,7 @@ export function ChatView({ conversation, project, onOpenProject, messages, loadi
   useEffect(() => {
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, live?.content, live?.thinking, live?.events, live?.searching, live?.sources, live?.extEvents]);
+  }, [messages, live?.content, live?.thinking, live?.events, live?.searching, live?.sources, live?.extEvents, live?.research]);
 
   // Screen readers hear when a reply starts and ends.
   const [announce, setAnnounce] = useState("");
@@ -381,6 +402,7 @@ export function ChatView({ conversation, project, onOpenProject, messages, loadi
                 events={live.events}
                 sources={live.sources}
                 searching={live.searching}
+                research={live.research}
                 showSkillChips={showSkillChips}
                 extEvents={live.extEvents}
                 workspace={workspace}

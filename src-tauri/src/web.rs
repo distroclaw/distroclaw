@@ -19,10 +19,10 @@ const MAX_PAGE_BYTES: usize = 1_500_000;
 const MAX_REDIRECTS: usize = 3;
 /// Below this much readable text, a page that runs scripts is worth rendering.
 pub const THIN_PAGE_CHARS: usize = 400;
-const BROWSER_UA: &str =
+pub(crate) const BROWSER_UA: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 /// Wikipedia asks API clients to name themselves.
-const APP_UA: &str = "DistroClaw/0.1 (desktop app; web search)";
+pub(crate) const APP_UA: &str = "DistroClaw/0.1 (desktop app; web search)";
 /// How long a provider that answered with a bot check is left alone.
 pub const PROVIDER_PAUSE: Duration = Duration::from_secs(15 * 60);
 
@@ -88,17 +88,7 @@ impl Web {
                 attempt.follow()
             }
         });
-        // No cookie store: nothing is kept between requests. No proxy: a proxy would resolve host
-        // names itself, past the public-address check below.
-        let http = reqwest::Client::builder()
-            .no_proxy()
-            .user_agent(BROWSER_UA)
-            .timeout(REQUEST_TIMEOUT)
-            .connect_timeout(Duration::from_secs(4))
-            .redirect(redirects)
-            .dns_resolver(Arc::new(PublicOnly { allow_private: allow }))
-            .build()
-            .expect("the web client builds");
+        let http = public_client(BROWSER_UA, redirects, REQUEST_TIMEOUT, allow);
         Self { cfg, http, paused_until: Arc::new(Mutex::new(None)) }
     }
 
@@ -206,21 +196,7 @@ impl Web {
         let url = self.checked(url)?;
         let host = url.host_str().ok_or("Not a valid web address.")?.to_string();
         // The address check above only sees literal IPs; resolve the host too.
-        let ip = match literal_ip(&url) {
-            Some(ip) => ip,
-            None => {
-                let port = url.port_or_known_default().unwrap_or(443);
-                let addrs: Vec<IpAddr> = tokio::net::lookup_host((host.as_str(), port))
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .map(|a| a.ip())
-                    .collect();
-                if addrs.is_empty() || (!self.cfg.allow_private && addrs.iter().any(|ip| !is_public(*ip))) {
-                    return Err(format!("{host} points to a private address."));
-                }
-                addrs.iter().copied().find(IpAddr::is_ipv4).unwrap_or(addrs[0])
-            }
-        };
+        let ip = resolve_public(&url, self.cfg.allow_private).await?;
         let task = tauri::async_runtime::spawn_blocking(move || {
             render_blocking(&browser, url.as_str(), &host, ip, RENDER_TIMEOUT, &stop)
         });
@@ -229,15 +205,54 @@ impl Web {
     }
 
     fn checked(&self, raw: &str) -> Result<Url, String> {
-        let url = Url::parse(raw).map_err(|_| "Not a valid web address.".to_string())?;
-        if !matches!(url.scheme(), "http" | "https") {
-            return Err("Only http and https pages are read.".into());
-        }
-        if !self.cfg.allow_private && literal_ip(&url).is_some_and(|ip| !is_public(ip)) {
-            return Err("Private addresses are not read.".into());
-        }
-        Ok(url)
+        checked_url(raw, self.cfg.allow_private)
     }
+}
+
+/// A client that only ever reaches public addresses (see `PublicOnly`). No cookie store: nothing
+/// is kept between requests. No proxy: a proxy would resolve host names itself, past the check.
+pub(crate) fn public_client(
+    user_agent: &str,
+    redirects: reqwest::redirect::Policy,
+    timeout: Duration,
+    allow_private: bool,
+) -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .user_agent(user_agent)
+        .timeout(timeout)
+        .connect_timeout(Duration::from_secs(4))
+        .redirect(redirects)
+        .dns_resolver(Arc::new(PublicOnly { allow_private }))
+        .build()
+        .expect("the web client builds")
+}
+
+/// `raw` as a web address that may be read: http or https, not a literal private address.
+pub(crate) fn checked_url(raw: &str, allow_private: bool) -> Result<Url, String> {
+    let url = Url::parse(raw).map_err(|_| "Not a valid web address.".to_string())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("Only http and https pages are read.".into());
+    }
+    if !allow_private && literal_ip(&url).is_some_and(|ip| !is_public(ip)) {
+        return Err("Private addresses are not read.".into());
+    }
+    Ok(url)
+}
+
+/// The address `url`'s host resolves to, refused when any of its addresses is not public.
+pub(crate) async fn resolve_public(url: &Url, allow_private: bool) -> Result<IpAddr, String> {
+    if let Some(ip) = literal_ip(url) {
+        return if allow_private || is_public(ip) { Ok(ip) } else { Err("Private addresses are not read.".into()) };
+    }
+    let host = url.host_str().ok_or("Not a valid web address.")?;
+    let port = url.port_or_known_default().unwrap_or(443);
+    let addrs: Vec<IpAddr> =
+        tokio::net::lookup_host((host, port)).await.map_err(|e| e.to_string())?.map(|a| a.ip()).collect();
+    if addrs.is_empty() || (!allow_private && addrs.iter().any(|ip| !is_public(*ip))) {
+        return Err(format!("{host} points to a private address."));
+    }
+    Ok(addrs.iter().copied().find(IpAddr::is_ipv4).unwrap_or(addrs[0]))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -253,12 +268,22 @@ enum Failure {
 }
 
 /// A bot check, captcha or challenge page.
-fn is_bot_check(body: &str) -> bool {
+pub(crate) fn is_bot_check(body: &str) -> bool {
     let lower = body.to_ascii_lowercase();
-    ["anomaly-modal", "captcha", "cf-chl", "challenge-platform", "are you a robot", "unusual traffic"]
+    // Only ever found on a challenge: DuckDuckGo's and Cloudflare's.
+    if ["anomaly-modal", "cf-chl", "cf_chl"].iter().any(|m| lower.contains(m)) {
+        return true;
+    }
+    // Words a challenge shows. A challenge shows little else, so a page with real text is not
+    // one, even when a script or a comment form names a captcha (every Wikipedia article does).
+    ["captcha", "are you a robot", "unusual traffic", "verify you are human", "challenge-platform"]
         .iter()
         .any(|m| lower.contains(m))
+        && html_to_text(body).chars().count() < BOT_CHECK_TEXT_CHARS
 }
+
+/// Visible text a bot check stays under.
+const BOT_CHECK_TEXT_CHARS: usize = 1_500;
 
 /// Resolves host names to public addresses only, so no page or redirect can reach this computer
 /// or the local network.
@@ -282,7 +307,7 @@ impl reqwest::dns::Resolve for PublicOnly {
 }
 
 /// The address when the host is written as one (or is `localhost`).
-fn literal_ip(url: &Url) -> Option<IpAddr> {
+pub(crate) fn literal_ip(url: &Url) -> Option<IpAddr> {
     let host = url.host_str()?;
     if host.eq_ignore_ascii_case("localhost") || host.to_ascii_lowercase().ends_with(".localhost") {
         return Some(IpAddr::from([127, 0, 0, 1]));
@@ -389,7 +414,7 @@ fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
 }
 
 /// DuckDuckGo's HTML results page: result links (through its redirect) and snippets, ads left out.
-fn parse_ddg(html: &str, link_class: &str, snippet_class: &str) -> Vec<Hit> {
+pub(crate) fn parse_ddg(html: &str, link_class: &str, snippet_class: &str) -> Vec<Hit> {
     let snippets: Vec<String> =
         elements_with_class(html, snippet_class).into_iter().map(|(_, inner)| inline_text(inner)).collect();
     let mut hits: Vec<Hit> = Vec::new();
@@ -422,7 +447,7 @@ fn result_url(href: &str) -> Option<String> {
     matches!(url.scheme(), "http" | "https").then(|| url.to_string())
 }
 
-fn parse_wikipedia(json: &str, api_url: &str) -> Vec<Hit> {
+pub(crate) fn parse_wikipedia(json: &str, api_url: &str) -> Vec<Hit> {
     let base = api_url.trim_end_matches("/w/api.php");
     let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
     v["query"]["search"]
@@ -443,7 +468,7 @@ fn parse_wikipedia(json: &str, api_url: &str) -> Vec<Hit> {
 }
 
 /// Short markup (a title, a snippet) as one line of text.
-fn inline_text(html: &str) -> String {
+pub(crate) fn inline_text(html: &str) -> String {
     collapse(&decode_entities(&strip_tags(html, false))).replace('\n', " ")
 }
 
@@ -594,7 +619,7 @@ pub fn decode_entities(s: &str) -> String {
 }
 
 /// One space between words, one line per paragraph, no blank lines.
-fn collapse(s: &str) -> String {
+pub(crate) fn collapse(s: &str) -> String {
     s.lines()
         .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|l| !l.is_empty())
@@ -906,6 +931,11 @@ mod tests {
         let asked: Vec<String> = site.hits().iter().map(|h| h.split('?').next().unwrap().to_string()).collect();
         assert_eq!(asked, ["/html/", "/w/api.php", "/w/api.php"], "the paused provider is not asked again");
         assert!(is_bot_check("<p>Please complete the CAPTCHA</p>") && !is_bot_check("<p>Rust 1.99</p>"));
+        assert!(is_bot_check(r#"<div class="anomaly-modal">x</div>"#));
+        // An article whose settings name a captcha, or with a captcha in its comment form.
+        let article = format!("<p>{}</p>", "Rust is a programming language. ".repeat(60));
+        let wiki = format!(r#"<script>{{"wgConfirmEditCaptchaNeededForGenericEdit":"hcaptcha"}}</script>{article}"#);
+        assert!(!is_bot_check(&wiki) && !is_bot_check(&format!(r#"{article}<form class="g-recaptcha"></form>"#)));
     }
 
     /// Needs internet and a Chromium-family browser: `cargo test real_render -- --ignored --nocapture`

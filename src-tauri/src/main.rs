@@ -7,6 +7,7 @@ fn main() {
         Some("--self-test") => std::process::exit(distroclaw_lib::self_test(args.get(2).map(Into::into))),
         // The app reads PDFs in a process of its own (see `attachments`).
         Some(distroclaw_lib::PDF_READER_FLAG) => std::process::exit(distroclaw_lib::pdf_reader_main()),
+        Some(distroclaw_lib::SHEET_READER_FLAG) => std::process::exit(distroclaw_lib::sheet_reader_main()),
         _ => distroclaw_lib::run(),
     }
 }

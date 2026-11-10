@@ -59,7 +59,7 @@ export function GeneralPanel(p: Props) {
       />
       <Toggle
         label="Online search"
-        description="Looks things up on the internet when a question needs it. Only search words are sent, never your files."
+        description="Looks things up on the internet when a question needs it, and lets Olymp (/olymp) research across many sources. Only search words are sent, never your files."
         checked={p.webSearch}
         onChange={p.onWebSearch}
       />

@@ -41,6 +41,11 @@ macro_rules! handler {
             crate::commands::engine_retry,
             crate::commands::get_setting,
             crate::commands::set_setting,
+            crate::commands::olymp_check,
+            crate::commands::olymp_status,
+            crate::commands::olymp_install,
+            crate::commands::olymp_uninstall,
+            crate::commands::olymp_start_services,
             crate::commands::list_conversations,
             crate::commands::create_conversation,
             crate::commands::move_conversation,
@@ -130,6 +135,42 @@ pub fn get_setting(svc: Svc, key: String) -> CmdResult<Option<String>> {
 #[tauri::command]
 pub fn set_setting(svc: Svc, key: String, value: String) -> CmdResult<()> {
     Ok(service::settings::set(&svc, &svc.desktop_principal()?, &key, &value)?)
+}
+
+/// Whether the local SearXNG and Crawl4AI Olymp may use answer (Settings › Olymp).
+#[tauri::command]
+pub async fn olymp_check(svc: Svc<'_>) -> CmdResult<crate::olymp::local::Check> {
+    let svc = svc.inner().clone();
+    let p = svc.desktop_principal()?;
+    let olymp = svc.olymp.clone().ok_or_else(|| AppError::Internal("Olymp is not available.".into()))?;
+    let cfg = svc.store.read(|db| crate::olymp::settings::load(db, &p.user_id))?;
+    Ok(crate::olymp::local::check(&olymp.local, &cfg).await)
+}
+
+/// Olymp, the add-on: installed or not, its services, Docker and the running setup.
+#[tauri::command]
+pub async fn olymp_status(svc: Svc<'_>) -> CmdResult<crate::olymp::addon::Status> {
+    let svc = svc.inner().clone();
+    blocking(move || crate::olymp::addon::status(&svc)).await
+}
+
+#[tauri::command]
+pub async fn olymp_install(svc: Svc<'_>) -> CmdResult<()> {
+    let svc = svc.inner().clone();
+    blocking(move || crate::olymp::addon::install(&svc, &svc.desktop_principal()?)).await
+}
+
+#[tauri::command]
+pub async fn olymp_uninstall(svc: Svc<'_>) -> CmdResult<()> {
+    let svc = svc.inner().clone();
+    blocking(move || crate::olymp::addon::uninstall(svc.clone(), &svc.desktop_principal()?)).await
+}
+
+/// Sets up SearXNG and Crawl4AI with Docker in the background; `olymp_status` follows it.
+#[tauri::command]
+pub async fn olymp_start_services(svc: Svc<'_>) -> CmdResult<()> {
+    let svc = svc.inner().clone();
+    blocking(move || crate::olymp::addon::start_services(svc.clone(), &svc.desktop_principal()?)).await
 }
 
 #[tauri::command]

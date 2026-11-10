@@ -1,0 +1,40 @@
+# SearXNG settings for Olymp (see docs/OLYMP.md). Starts from SearXNG's defaults and changes
+# only what Olymp needs. Which engines you enable, and keeping to their terms, is up to you.
+use_default_settings: true
+
+general:
+  instance_name: "DistroClaw Olymp"
+
+server:
+  # The secret comes from the SEARXNG_SECRET environment variable (docker-compose.yml).
+  secret_key: "set-by-SEARXNG_SECRET"
+  # Only this computer reaches the instance (127.0.0.1 in docker-compose.yml), so no bot limiter.
+  limiter: false
+  image_proxy: false
+
+search:
+  safe_search: 1
+  # Olymp reads results as JSON.
+  formats:
+    - html
+    - json
+
+engines:
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: yahoo
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: startpage
+    disabled: false
+  - name: qwant
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: wikipedia
+    disabled: false

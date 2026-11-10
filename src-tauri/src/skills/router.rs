@@ -15,6 +15,9 @@ pub struct RouteContext<'a> {
     pub conversation_skill_id: Option<&'a str>,
     /// Chosen in the composer for this message.
     pub explicit_skill_id: Option<&'a str>,
+    /// Online search is on. Skills that need it (Olymp) are only picked on their own while it is;
+    /// chosen explicitly, the reply then says how to turn it on.
+    pub online: bool,
 }
 
 pub struct Routing<'a> {
@@ -108,9 +111,10 @@ pub fn route<'a>(
             return Routing { skills: vec![s], text: remainder.trim().to_string() };
         }
     }
-    // 2. Project pins always come along.
+    // 2. Project pins always come along, except skills that need Online search while it is off.
+    let ready = |s: &&Skill| ctx.online || !s.needs_online();
     let mut picks: Vec<&Skill> =
-        ctx.project_skill_ids.iter().filter_map(|id| by_id(id)).take(MAX_SKILLS_PER_TURN).collect();
+        ctx.project_skill_ids.iter().filter_map(|id| by_id(id)).filter(ready).take(MAX_SKILLS_PER_TURN).collect();
     // 3. Score the rest.
     let lower = text.to_lowercase();
     let kinds = attachment_kinds(ctx.attachments);
@@ -118,6 +122,7 @@ pub fn route<'a>(
         .iter()
         .copied()
         .filter(|s| s.id != GENERAL_CHAT && !picks.iter().any(|p| p.id == s.id))
+        .filter(ready)
         .map(|s| (score(s, &lower, &kinds, ctx.area), s))
         .filter(|(sc, _)| *sc > 0)
         .collect();
@@ -167,7 +172,26 @@ mod tests {
             project_skill_ids: &[],
             conversation_skill_id: None,
             explicit_skill_id: None,
+            online: false,
         }
+    }
+
+    #[test]
+    fn olymp_is_picked_on_its_own_only_while_online() {
+        let set = set();
+        let free = Entitlements { edition: Edition::Free };
+        let none = HashSet::new();
+        assert_eq!(ids(&route(&ctx("deep research on heat pumps", &[]), &set, &free, &none)), vec!["general-chat"]);
+        let mut online = ctx("deep research on heat pumps", &[]);
+        online.online = true;
+        assert_eq!(ids(&route(&online, &set, &free, &none)), vec!["olymp"]);
+        // Chosen explicitly it still comes, so the reply can say how to turn search on.
+        let r = route(&ctx("/olymp heat pumps", &[]), &set, &free, &none);
+        assert_eq!((ids(&r), r.text.as_str()), (vec!["olymp"], "heat pumps"));
+        let pins = ["olymp".to_string()];
+        let mut pinned = ctx("hello", &[]);
+        pinned.project_skill_ids = &pins;
+        assert_eq!(ids(&route(&pinned, &set, &free, &none)), vec!["general-chat"]);
     }
 
     #[test]

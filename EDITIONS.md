@@ -17,7 +17,7 @@ Everything one person needs to work with a local AI on their own computer, with 
 - Asking questions about any number of folders, read-only, with sources
 - Any model from the DistroClaw model library that your computer can run, model switching and context length
 - Built-in skills, plus writing, importing and testing your own skills
-- Online search (off by default; you turn it on)
+- Online search (off by default; you turn it on), including Olymp, the research agent
 - Settings, themes, the local database and everything else in this repository
 
 ## What Pro adds (not in this repository)

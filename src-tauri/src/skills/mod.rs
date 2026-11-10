@@ -65,6 +65,13 @@ pub struct SkillSet {
     pub errors: Vec<(String, String)>,
 }
 
+impl Skill {
+    /// Whether the skill needs Online search to do anything (it names Olymp's research tools).
+    pub fn needs_online(&self) -> bool {
+        self.tools.iter().any(|t| crate::tools::get(t).is_some_and(|s| s.kind == crate::tools::ToolKind::Research))
+    }
+}
+
 impl SkillSet {
     pub fn get(&self, id: &str) -> Option<&Skill> {
         self.skills.iter().find(|s| s.id == id)

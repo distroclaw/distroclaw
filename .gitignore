@@ -29,3 +29,6 @@ dist-ssr
 *.p12
 *.p8
 *.pem
+
+# Local Claude Code state (worktrees, settings)
+.claude/

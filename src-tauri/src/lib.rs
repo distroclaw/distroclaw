@@ -11,6 +11,7 @@ mod fileops;
 mod hardware;
 mod license;
 mod models;
+mod olymp;
 mod process;
 mod selftest;
 mod service;
@@ -28,7 +29,7 @@ use std::sync::Arc;
 use store::Store;
 use tauri::{Manager, RunEvent};
 
-pub use attachments::{PDF_READER_FLAG, pdf_reader_main};
+pub use attachments::{PDF_READER_FLAG, SHEET_READER_FLAG, pdf_reader_main, sheet_reader_main};
 pub use selftest::self_test;
 
 /// Which engine to use. Development builds talk to a local Ollama (or `DISTROCLAW_OLLAMA_URL`);

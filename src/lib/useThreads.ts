@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, Attachment, ChatEvent, errorText, ExtEvent, Message, normalizeMessage, SendOptions, Source } from "./api";
+import { api, Attachment, ChatEvent, errorText, ExtEvent, Message, normalizeMessage, ResearchStatus, SendOptions, Source } from "./api";
 
 /** Events shown inside a reply while it streams (deltas are folded into content/thinking). */
 export type LiveEvent = Extract<ChatEvent, { type: "skill" | "toolCall" | "toolResult" }>;
@@ -14,9 +14,19 @@ export interface LiveReply {
   sources: Source[];
   /** Events the core does not handle, for the extension's message addon. */
   extEvents: ExtEvent[];
+  /** Olymp's latest progress while it researches; cleared once the answer starts. */
+  research: ResearchStatus | null;
 }
 
-const emptyReply = (): LiveReply => ({ content: "", thinking: "", events: [], searching: false, sources: [], extEvents: [] });
+const emptyReply = (): LiveReply => ({
+  content: "",
+  thinking: "",
+  events: [],
+  searching: false,
+  sources: [],
+  extEvents: [],
+  research: null,
+});
 
 interface DeltaBuffer {
   content: string;
@@ -86,7 +96,14 @@ export function useThreads(onSettled?: (id: string) => unknown) {
         return;
       }
       if (!buf.content && !buf.thinking) return;
-      const next = { ...cur, content: cur.content + buf.content, thinking: cur.thinking + buf.thinking, searching: false };
+      const next = {
+        ...cur,
+        content: cur.content + buf.content,
+        thinking: cur.thinking + buf.thinking,
+        searching: false,
+        // The answer has started: the research progress line gives way to it.
+        research: buf.content ? null : cur.research,
+      };
       buf.content = "";
       buf.thinking = "";
       commitLive({ ...liveRef.current, [id]: next });
@@ -172,6 +189,10 @@ export function useThreads(onSettled?: (id: string) => unknown) {
         }
         if (e.type === "sources") {
           commitLive({ ...liveRef.current, [id]: { ...cur, searching: false, sources: e.sources ?? [] } });
+          return;
+        }
+        if (e.type === "research") {
+          commitLive({ ...liveRef.current, [id]: { ...cur, research: e } });
           return;
         }
         if (e.type === "skill" || e.type === "toolCall" || e.type === "toolResult") {

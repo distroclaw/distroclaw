@@ -73,7 +73,14 @@ pub fn list(svc: &Services, p: &Principal) -> AppResult<Vec<SkillSummary>> {
     let ent = svc.entitlements()?;
     let disabled = svc.store.read(|db| db.disabled_skill_ids(&p.user_id))?;
     let set = svc.skills.read().unwrap();
-    let mut out: Vec<SkillSummary> = set.skills.iter().map(|s| summary(s, &ent, &disabled)).collect();
+    // Olymp is an add-on: it is only listed once installed.
+    let olymp = svc.store.read(crate::olymp::addon::installed)?;
+    let mut out: Vec<SkillSummary> = set
+        .skills
+        .iter()
+        .filter(|s| olymp || s.id != crate::skills::loader::OLYMP)
+        .map(|s| summary(s, &ent, &disabled))
+        .collect();
     for (folder, error) in &set.errors {
         out.push(SkillSummary {
             id: folder.clone(),
