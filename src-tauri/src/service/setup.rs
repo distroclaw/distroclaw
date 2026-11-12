@@ -388,10 +388,15 @@ mod tests {
     fn a_download_that_does_not_fit_says_how_much_space_it_needs() {
         let gb = 1024 * 1024 * 1024;
         let model = hardware::CHAT_MODELS.iter().find(|m| m.tag == "qwen3.5:4b").unwrap();
+        // The download plus the headroom, less the gigabyte already downloaded: 5.0 GB for the Apple
+        // Silicon build, 4.1 GB for the GGUF build Windows gets.
+        let needs = if cfg!(windows) { "4.1" } else { "5.0" };
         assert_eq!(
             not_enough_disk(model, 3 * gb, gb),
-            "Not enough free disk space for Qwen 3.5 4B: it needs about 5.0 GB and 3.0 GB are free. \
-             Free up space or pick a smaller model."
+            format!(
+                "Not enough free disk space for Qwen 3.5 4B: it needs about {needs} GB and 3.0 GB are free. \
+                 Free up space or pick a smaller model."
+            )
         );
     }
 

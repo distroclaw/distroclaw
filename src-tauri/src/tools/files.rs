@@ -538,7 +538,9 @@ mod tests {
         assert!(
             run("list_folder", &scope, &json!({ "path": p(&tmp, "notes.txt") })).unwrap_err().contains("read_file")
         );
-        assert!(run("list_folder", &scope, &json!({ "path": "/" })).unwrap_err().contains("outside"));
+        // The root of the disk is outside the allowed folders (on Windows "/" is not even a full path).
+        let disk_root = if cfg!(windows) { r"C:\" } else { "/" };
+        assert!(run("list_folder", &scope, &json!({ "path": disk_root })).unwrap_err().contains("outside"));
     }
 
     #[test]
