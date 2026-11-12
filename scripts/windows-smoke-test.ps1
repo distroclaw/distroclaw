@@ -140,6 +140,20 @@ Check 'no connection to another computer while the app runs' ($remote.Count -eq 
 Check 'data folder in the local profile' (Test-Path $dataDir) $dataDir
 Check 'nothing in the roaming profile' (-not (Test-Path $roamingDir)) $roamingDir
 
+# A picture of the screen with the app open, as evidence that the window renders on Windows.
+try {
+  Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+  $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+  $bitmap = [System.Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
+  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+  $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+  $bitmap.Save((Join-Path $Report 'app-window.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+  $graphics.Dispose(); $bitmap.Dispose()
+  Note '- note: screenshot of the running app: app-window.png'
+} catch {
+  Note "- note: no screenshot ($($_.Exception.Message))"
+}
+
 # Ended like Task Manager does: the engine must end with the app (Windows job).
 Stop-Process -Id $app.Id -Force
 Start-Sleep -Seconds 5

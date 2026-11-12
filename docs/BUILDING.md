@@ -117,12 +117,7 @@ The workflow has read-only access: it cannot create or change a release. Started
 
 ### Release a Windows build
 
-Nothing is published automatically. For a release:
-
-1. Bump the version and export to the public repository as for macOS, push, and push the tag `vX.Y.Z`.
-2. Wait for the **windows** run of that tag to pass, download its artifact and run the manual checks below.
-3. Draft the release as usual with the DMG. Attach `DistroClaw-Setup.exe` and add its line from `DistroClaw-Setup.exe.sha256` to `SHA256SUMS.txt`.
-4. Publish the release. Only then set `download.windows` on the website.
+macOS and Windows are released together, with one version, through the steps and gates in [RELEASING.md](RELEASING.md). Nothing is published automatically.
 
 ### Test installing and uninstalling on Windows 10 and 11
 

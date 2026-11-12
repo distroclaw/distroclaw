@@ -1,10 +1,13 @@
 # Windows installer: builds DistroClaw-Setup.exe for Windows 10 and 11 (x64), then installs it on
-# the runner, tests it offline and uninstalls it (scripts/windows-smoke-test.ps1). Runs on release
-# tags and by hand. It only uploads a build artifact; putting the installer on a GitHub release
-# stays a manual step after the tests (docs/BUILDING.md).
+# the runner, tests it offline and uninstalls it (scripts/windows-smoke-test.ps1), and downloads,
+# uses and deletes models with its engine (scripts/windows-model-test.ps1). Runs on every pull
+# request, on release tags and by hand, so a change that breaks Windows is seen before it is merged.
+# It only uploads a build artifact; releases are made by hand (docs/RELEASING.md).
 name: windows
 
 on:
+  pull_request:
+    branches: [main]
   push:
     tags: ["v*"]
   workflow_dispatch:
@@ -73,14 +76,32 @@ jobs:
             Where-Object { Test-Path $_ }
           if ($found) { throw "private code in the build tree: $found" }
 
-      - name: Tag matches the app version
-        if: startsWith(github.ref, 'refs/tags/')
+      # One version for macOS and Windows; a release tag must be that version.
+      - name: Version
         working-directory: ${{ steps.tree.outputs.dir }}
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: node scripts/version.mjs check $env:TAG
+
+      # A release needs every catalogue model in the library for both systems: the Apple Silicon
+      # build under its tag, the GGUF build for Windows under <tag>-gguf.
+      - name: Every model is in the library
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: ${{ steps.tree.outputs.dir }}
         run: |
-          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          if ($env:TAG -ne "v$version") { throw "tag $env:TAG does not match version $version in tauri.conf.json" }
+          $catalogue = (Get-Content src-tauri/src/hardware.rs -Raw) -split 'pub const CHAT_MODELS' | Select-Object -Last 1
+          $tags = [regex]::Matches(($catalogue -split '\];')[0], 'tag: "([^"]+)"') | ForEach-Object { $_.Groups[1].Value }
+          if ($tags.Count -lt 1) { throw 'no catalogue models found in hardware.rs' }
+          $missing = foreach ($tag in $tags) {
+            $name, $version = $tag -split ':'
+            foreach ($v in $version, "$version-gguf") {
+              $url = "https://models.distroclaw.com/v2/distroclaw/$name/manifests/$v"
+              try { Invoke-WebRequest $url -Method Head -Headers @{ Accept = 'application/vnd.docker.distribution.manifest.v2+json' } | Out-Null }
+              catch { "${name}:$v" }
+            }
+          }
+          if ($missing) { throw "not in the model library: $($missing -join ', ')" }
+          Write-Host "All $($tags.Count) models are in the library for macOS and Windows."
 
       - name: npm packages (Community tree)
         if: steps.tree.outputs.dir != 'source'
@@ -182,11 +203,19 @@ jobs:
         working-directory: ${{ steps.tree.outputs.dir }}
         run: pwsh scripts/windows-smoke-test.ps1 -Installer "$env:GITHUB_WORKSPACE/out/DistroClaw-Setup.exe" -Report "$env:GITHUB_WORKSPACE/out/smoke-test"
 
-      - name: Smoke test report
+      # Download → chat → delete, one model after the other, with the engine the installer ships.
+      - name: Model test (download, chat, delete)
+        if: ${{ !inputs.update_lock }}
+        working-directory: ${{ steps.tree.outputs.dir }}
+        run: pwsh scripts/windows-model-test.ps1 -Engine src-tauri/resources/engine -Models qwen3.5:0.8b,qwen3.5:4b -Report "$env:GITHUB_WORKSPACE/out/model-test"
+
+      - name: Test reports
         if: ${{ always() && !inputs.update_lock }}
         run: |
-          $md = Join-Path $env:GITHUB_WORKSPACE 'out/smoke-test/smoke-test.md'
-          if (Test-Path $md) { Get-Content $md -Raw >> $env:GITHUB_STEP_SUMMARY }
+          foreach ($md in 'out/smoke-test/smoke-test.md', 'out/model-test/model-test.md') {
+            $file = Join-Path $env:GITHUB_WORKSPACE $md
+            if (Test-Path $file) { Get-Content $file -Raw >> $env:GITHUB_STEP_SUMMARY }
+          }
 
       # Only after every test passed. The release itself is made by hand.
       - uses: actions/upload-artifact@v4

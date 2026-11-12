@@ -1,0 +1,51 @@
+name: Release checklist
+description: For maintainers. One issue per release of DistroClaw for macOS and Windows (docs/RELEASING.md).
+title: "Release vX.Y.Z"
+labels: [release]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: "0.3.1"
+    validations:
+      required: true
+  - type: checkboxes
+    id: prepare
+    attributes:
+      label: Prepare
+      options:
+        - label: Every change for this release is merged through a pull request with ci and windows green
+        - label: "`node scripts/version.mjs set X.Y.Z` and the CHANGELOG section, merged"
+        - label: New or changed models are in the library for both systems (Apple Silicon build and `-gguf` build)
+  - type: checkboxes
+    id: build
+    attributes:
+      label: Build and automatic tests
+      options:
+        - label: Tag `vX.Y.Z` pushed; its windows run is green (build, tests, smoke test, model test, model library)
+        - label: DistroClaw-Setup.exe and its .sha256 downloaded from the tag's run; smoke-test and model-test reports read
+        - label: DMG built from the tagged commit; `scripts/macos-smoke-test.sh` passed
+  - type: checkboxes
+    id: manual
+    attributes:
+      label: Manual tests
+      options:
+        - label: "Mac: install, first start, model download, chat, folders, attachments, Olymp, Settings, update over the previous version"
+        - label: "Windows 10: the checklist in docs/BUILDING.md"
+        - label: "Windows 11: the checklist in docs/BUILDING.md (also with Smart App Control on)"
+        - label: "Windows with a graphics card (engine log names the Vulkan device) and without (processor)"
+  - type: checkboxes
+    id: publish
+    attributes:
+      label: Publish
+      options:
+        - label: Draft release with DistroClaw_macOS_arm64.dmg, DistroClaw-Setup.exe and SHA256SUMS.txt; notes from the CHANGELOG
+        - label: Release published
+        - label: Website updated (version, date, checksums, download links, changelog page)
+        - label: Both installers downloaded through the website and checked against SHA256SUMS.txt
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Test results, problems found, decisions.

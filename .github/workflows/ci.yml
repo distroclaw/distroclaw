@@ -34,6 +34,10 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # One version for macOS and Windows, in every file that holds it.
+      - name: Version
+        run: node scripts/version.mjs check
+
       - name: Type-check frontend
         run: npm run typecheck
 
