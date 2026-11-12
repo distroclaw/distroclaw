@@ -25,7 +25,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 futures-util = "0.3"
 tokio = { version = "1", features = ["time", "macros", "sync", "net"] }
 uuid = { version = "1", features = ["v4"] }
-pdf-extract = "0.9"
+pdf-extract = "0.12"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 # Spreadsheets (xlsx, xls, ods) for read_file and Olymp, read in the sandboxed reader process.
 calamine = "0.38"
