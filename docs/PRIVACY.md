@@ -16,6 +16,8 @@ The AI engine runs on your computer and accepts connections only from it. Nobody
 
 The app contains **no analytics, telemetry, crash reporting or advertising**.
 
+On Windows, the app's window is drawn by Microsoft WebView2, a part of Windows. On its own, WebView2 would contact Microsoft in the background while the app runs. DistroClaw turns those background services off and gives WebView2 no route to the internet, and every Windows build is tested while running: the test fails if the app opens any connection to another computer. WebView2's own updates come through Windows and Microsoft Edge, not through DistroClaw.
+
 ## When the app goes online
 
 | When | Who receives what | Can you avoid it? |

@@ -18,7 +18,8 @@
         "minWidth": 760,
         "minHeight": 520,
         "dragDropEnabled": false,
-        "backgroundColor": "#0a0a0f"
+        "backgroundColor": "#0a0a0f",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msEdgeTranslate,Translate,OptimizationHints,MediaRouter,AutofillServerCommunication,CertificateTransparencyComponentUpdater,NetworkTimeServiceQuerying --disable-background-networking --disable-component-update --disable-domain-reliability --disable-sync --no-pings --disable-client-side-phishing-detection --disable-breakpad --dns-prefetch-disable --proxy-server=http://127.0.0.1:9"
       }
     ],
     "security": {

@@ -56,7 +56,8 @@ function Get-Installed([string] $Dir) {
       $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, 'OrdinalIgnoreCase') })
 }
 
-# Watches the given processes for $Seconds and returns every TCP connection to a remote address.
+# Watches the given processes for $Seconds and returns every TCP connection to a remote address,
+# with the process (and WebView2 process type) that opened it and the server's host name.
 function Watch-Connections([scriptblock] $Pids, [int] $Seconds, [System.Diagnostics.Process] $Until) {
   $seen = @{}
   $end = (Get-Date).AddSeconds($Seconds)
@@ -65,14 +66,19 @@ function Watch-Connections([scriptblock] $Pids, [int] $Seconds, [System.Diagnost
     foreach ($c in @(Get-NetTCPConnection -ErrorAction SilentlyContinue)) {
       if ($ids -contains $c.OwningProcess -and $c.State -ne 'Listen' -and
           $c.RemoteAddress -notin '127.0.0.1', '::1', '0.0.0.0', '::') {
-        $name = (Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue).ProcessName
-        $seen["${name}: $($c.RemoteAddress):$($c.RemotePort)"] = $true
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $($c.OwningProcess)" -ErrorAction SilentlyContinue
+        $kind = if ("$($proc.CommandLine)" -match '--utility-sub-type=(\S+)') { " $($Matches[1])" }
+          elseif ("$($proc.CommandLine)" -match '--type=(\S+)') { " $($Matches[1])" } else { '' }
+        $seen["$($proc.Name)${kind}: $($c.RemoteAddress):$($c.RemotePort)"] = $c.RemoteAddress
       }
     }
     if ($Until -and $Until.HasExited) { break }
     Start-Sleep -Milliseconds 500
   }
-  @($seen.Keys)
+  foreach ($key in @($seen.Keys)) {
+    $host_ = try { (Resolve-DnsName -Name $seen[$key] -Type PTR -QuickTimeout -ErrorAction Stop | Select-Object -First 1).NameHost } catch { $null }
+    if ($host_) { "$key ($host_)" } else { $key }
+  }
 }
 
 # A personal file: it must be the same after install, use and uninstall.
@@ -131,7 +137,7 @@ Check 'no connection to another computer during the self-test' ($remote.Count -e
 # ---------- 3. Normal start, offline ----------
 Note "`n## Normal start"
 $app = Start-Process -FilePath $exe -PassThru
-$remote = Watch-Connections -Pids { @(Get-Tree $app.Id | ForEach-Object ProcessId) } -Seconds 45
+$remote = Watch-Connections -Pids { @(Get-Tree $app.Id | ForEach-Object ProcessId) } -Seconds 60
 Check 'app keeps running' (-not $app.HasExited)
 $tree = @(Get-Tree $app.Id)
 Check 'WebView2 started' (@($tree | Where-Object Name -eq 'msedgewebview2.exe').Count -gt 0)
