@@ -1,6 +1,6 @@
 [package]
 name = "distroclaw"
-version = "0.2.0"
+version = "0.3.0"
 description = "DistroClaw — local AI chat"
 authors = ["DistroClaw"]
 edition = "2024"
