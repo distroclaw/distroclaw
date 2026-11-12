@@ -22,7 +22,7 @@ For each release, open a **Release checklist** issue (New issue > Release checkl
 |---|---|---|
 | **ci** (macOS) | version, type-check, frontend build, `cargo fmt`, `clippy -D warnings`, tests, licence notices, `npm audit` | every pull request |
 | **windows** | the same build on Windows, clippy and tests, the installer, then `scripts/windows-smoke-test.ps1` (silent install, offline self-test with outbound traffic blocked, the engine ends with the app, uninstall while running, personal files untouched, screenshot) and `scripts/windows-model-test.ps1` (download → chat → delete, two models, on the processor) | every pull request and release tag |
-| **Model library** | every catalogue model is in the library for both systems: the Apple Silicon build under its tag, the GGUF build under `<tag>-gguf` ([MODELS.md](MODELS.md)) | release tag (windows workflow) |
+| **Model library** | every model each system offers is in the library: the Apple Silicon build of all of them under its tag, the GGUF build of the ones Windows offers under `<tag>-gguf` ([MODELS.md](MODELS.md)) | release tag (windows workflow) |
 | **DMG** | `scripts/macos-smoke-test.sh`: the DMG's app, its signature, the self-test, and download → chat → delete with the bundled engine | on a Mac, for every release |
 | **Manual** | a person installs and uses both builds (below) | for every release |
 

@@ -156,7 +156,7 @@ const fn download(mlx: f64, gguf: f64) -> u64 {
 /// Qwen sizes are the upper end listed on ollama.com (checked 30.10.2026). Gemma's size is its
 /// Apple Silicon download, and its memory need is Qwen 3.5 9B's scaled by their measured peak
 /// use with about 23,000 tokens of context (11.0 against 13.0 GB on an M3 Pro, 03.11.2026).
-pub const CHAT_MODELS: &[ModelOption] = &[
+const ALL_CHAT_MODELS: &[ModelOption] = &[
     ModelOption {
         tag: "qwen3.5:0.8b",
         label: "Qwen 3.5 0.8B",
@@ -200,6 +200,15 @@ pub const CHAT_MODELS: &[ModelOption] = &[
         description: "Most capable. Needs a workstation with plenty of memory.",
     },
 ];
+
+/// How many of the smallest chat models Windows offers: those whose GGUF build is in the model
+/// library (published with `--tag-suffix -gguf`, see docs/MODELS.md). They are also the largest a
+/// computer without a big graphics card is recommended. Raise it once the next build is published.
+const WINDOWS_MODELS: usize = 3;
+
+/// The chat models this system offers: all of them on macOS, the smallest ones on Windows.
+pub const CHAT_MODELS: &[ModelOption] =
+    if cfg!(windows) { ALL_CHAT_MODELS.split_at(WINDOWS_MODELS).0 } else { ALL_CHAT_MODELS };
 
 /// Embedding model for document search. Setup does not download it, so the disk space a model
 /// needs leaves it out.
@@ -354,6 +363,8 @@ mod tests {
             (machine(4.0, vec![], 4, 500.0), "qwen3.5:0.8b"),
         ];
         for (hw, want) in cases {
+            // Windows offers only the smallest models: where a larger one would fit, the largest offered.
+            let want = if CHAT_MODELS.iter().any(|m| m.tag == want) { want } else { CHAT_MODELS.last().unwrap().tag };
             assert_eq!(recommend(&hw, None).tag, want, "{} GB, {:?}", hw.total_memory_bytes / gb(1.0), hw.gpus);
         }
     }
@@ -364,8 +375,12 @@ mod tests {
             .iter()
             .map(|s| s.trim_end_matches("-a3b").trim_end_matches('b').parse().unwrap())
             .collect();
-        let listed: Vec<&str> = CHAT_MODELS.iter().map(|m| m.tag.split(':').nth(1).unwrap()).collect();
+        let listed: Vec<&str> = ALL_CHAT_MODELS.iter().map(|m| m.tag.split(':').nth(1).unwrap()).collect();
         assert_eq!(listed, ["0.8b", "2b", "4b", "9b", "12b", "35b-a3b"]);
+        // This system offers the smallest ones in the same order: all of them, or the first three on Windows.
+        let offered: Vec<&str> = CHAT_MODELS.iter().map(|m| m.tag).collect();
+        let all: Vec<&str> = ALL_CHAT_MODELS.iter().map(|m| m.tag).collect();
+        assert_eq!(offered, all[..if cfg!(windows) { WINDOWS_MODELS } else { all.len() }]);
         assert!(sizes.windows(2).all(|w| w[0] < w[1]));
         // Where Gemma does not fit but Qwen 3.5 9B would not either, the 4B is next.
         let r = recommend(&machine(13.0, apple(), 8, 500.0), None);

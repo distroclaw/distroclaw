@@ -28,7 +28,7 @@ Everything you create or open stays in DistroClaw's data folder on your Mac. The
 ## Requirements
 
 - macOS 14 or later on a Mac with Apple Silicon (M1 or newer). Intel Macs are not supported.
-- Or Windows 10 (22H2) or Windows 11, 64-bit (x64). Windows on ARM is not supported. A separate graphics card (NVIDIA, AMD Radeon or Intel Arc) is optional: DistroClaw uses it through Vulkan when its driver supports that. Otherwise, and on PCs with only built-in graphics, the model runs on the processor, which is slower than on a Mac, especially with long documents.
+- Or Windows 10 (22H2) or Windows 11, 64-bit (x64). Windows on ARM is not supported. A separate graphics card (NVIDIA, AMD Radeon or Intel Arc) is optional: DistroClaw uses it through Vulkan when its driver supports that. Otherwise, and on PCs with only built-in graphics, the model runs on the processor, which is slower than on a Mac, especially with long documents. Windows offers the three smaller models for now (Qwen 3.5 0.8B, 2B and 4B).
 - Free disk space for the model: 1.3 GB to 22 GB depending on the model; the recommended model needs 3 to 8 GB (about 8 GB on a Mac with 16 GB of memory).
 - An internet connection for the first model download.
 

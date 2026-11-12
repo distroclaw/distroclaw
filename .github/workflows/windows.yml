@@ -83,25 +83,29 @@ jobs:
           TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
         run: node scripts/version.mjs check $env:TAG
 
-      # A release needs every catalogue model in the library for both systems: the Apple Silicon
-      # build under its tag, the GGUF build for Windows under <tag>-gguf.
+      # A release needs every model each system offers in the library: the Apple Silicon build of
+      # all of them under its tag, and the GGUF build of the ones Windows offers under <tag>-gguf
+      # (ALL_CHAT_MODELS and WINDOWS_MODELS in src-tauri/src/hardware.rs).
       - name: Every model is in the library
         if: startsWith(github.ref, 'refs/tags/')
         working-directory: ${{ steps.tree.outputs.dir }}
         run: |
-          $catalogue = (Get-Content src-tauri/src/hardware.rs -Raw) -split 'pub const CHAT_MODELS' | Select-Object -Last 1
-          $tags = [regex]::Matches(($catalogue -split '\];')[0], 'tag: "([^"]+)"') | ForEach-Object { $_.Groups[1].Value }
-          if ($tags.Count -lt 1) { throw 'no catalogue models found in hardware.rs' }
-          $missing = foreach ($tag in $tags) {
-            $name, $version = $tag -split ':'
-            foreach ($v in $version, "$version-gguf") {
+          $src = Get-Content src-tauri/src/hardware.rs -Raw
+          $block = (($src -split 'const ALL_CHAT_MODELS')[1] -split '\];')[0]
+          $tags = @([regex]::Matches($block, 'tag: "([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+          $windows = [int][regex]::Match($src, 'const WINDOWS_MODELS: usize = (\d+);').Groups[1].Value
+          if ($tags.Count -lt 1 -or $windows -lt 1) { throw 'could not read the model catalogue from hardware.rs' }
+          $missing = for ($i = 0; $i -lt $tags.Count; $i++) {
+            $name, $version = $tags[$i] -split ':'
+            $versions = if ($i -lt $windows) { $version, "$version-gguf" } else { , $version }
+            foreach ($v in $versions) {
               $url = "https://models.distroclaw.com/v2/distroclaw/$name/manifests/$v"
               try { Invoke-WebRequest $url -Method Head -Headers @{ Accept = 'application/vnd.docker.distribution.manifest.v2+json' } | Out-Null }
               catch { "${name}:$v" }
             }
           }
           if ($missing) { throw "not in the model library: $($missing -join ', ')" }
-          Write-Host "All $($tags.Count) models are in the library for macOS and Windows."
+          Write-Host "All $($tags.Count) models are in the library for macOS, and the first $windows for Windows."
 
       - name: npm packages (Community tree)
         if: steps.tree.outputs.dir != 'source'

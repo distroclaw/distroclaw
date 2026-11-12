@@ -23,7 +23,7 @@ Models live in the app's data folder, `~/Library/Application Support/com.distroc
 
 ## On Windows
 
-Models live in `%LOCALAPPDATA%\com.distroclaw.app\models\`. The Windows engine runs the GGUF build of each model, which the library serves under the same tag with `-gguf` (`qwen3.5:4b-gguf`); the app installs it under the catalogue name, so everything else is the same as on a Mac. The GGUF downloads are about 1.3, 2.5, 3.1, 6.2, 7.5 and 20.6 GB (smallest to largest model; `CHAT_MODELS` holds both sizes). The memory available for AI is a dedicated NVIDIA graphics card's memory (4 GB or more), otherwise half of the RAM; without such a card the app suggests at most Qwen 3.5 4B (2B with fewer than four cores), because larger models are slow on a processor.
+Models live in `%LOCALAPPDATA%\com.distroclaw.app\models\`. The Windows engine runs the GGUF build of each model, which the library serves under the same tag with `-gguf` (`qwen3.5:4b-gguf`); the app installs it under the catalogue name, so everything else is the same as on a Mac. For now Windows offers the three smaller models, Qwen 3.5 0.8B, 2B and 4B (downloads of about 1.3, 2.5 and 3.1 GB): their GGUF builds are in the library, and they are the largest a computer without a big NVIDIA card is recommended anyway. The larger models follow once their GGUF builds are published: raise `WINDOWS_MODELS` in `src-tauri/src/hardware.rs` then. The memory available for AI is a dedicated NVIDIA graphics card's memory (4 GB or more), otherwise half of the RAM; without such a card the app suggests at most Qwen 3.5 4B (2B with fewer than four cores), because larger models are slow on a processor.
 
 ## The model library
 
