@@ -42,7 +42,7 @@ jobs:
           path: source
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: source/.nvmrc
           cache: npm
