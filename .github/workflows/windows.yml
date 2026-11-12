@@ -211,7 +211,7 @@ jobs:
       - name: Model test (download, chat, delete)
         if: ${{ !inputs.update_lock }}
         working-directory: ${{ steps.tree.outputs.dir }}
-        run: pwsh scripts/windows-model-test.ps1 -Engine src-tauri/resources/engine -Models qwen3.5:0.8b,qwen3.5:4b -Report "$env:GITHUB_WORKSPACE/out/model-test"
+        run: ./scripts/windows-model-test.ps1 -Engine src-tauri/resources/engine -Models 'qwen3.5:0.8b', 'qwen3.5:4b' -Report "$env:GITHUB_WORKSPACE/out/model-test"
 
       - name: Test reports
         if: ${{ always() && !inputs.update_lock }}

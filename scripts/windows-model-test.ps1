@@ -17,6 +17,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Also accepts "a,b" as one argument, as `pwsh -File` passes a comma list.
+$Models = @($Models | ForEach-Object { $_ -split ',' } | ForEach-Object Trim | Where-Object { $_ })
 New-Item -ItemType Directory -Force -Path $Report | Out-Null
 $log = Join-Path $Report 'model-test.md'
 Set-Content -Path $log -Value "# Windows model test`n" -Encoding utf8
