@@ -371,6 +371,7 @@ pub(crate) fn today() -> String {
 }
 
 /// The local time zone's offset from UTC at `secs`; zero where it cannot be read.
+#[cfg(not(windows))]
 fn utc_offset_secs(secs: i64) -> i64 {
     #[cfg(unix)]
     {
@@ -383,6 +384,22 @@ fn utc_offset_secs(secs: i64) -> i64 {
     }
     let _ = secs;
     0
+}
+
+/// The local time zone's current offset from UTC; `secs` is always now where this is used.
+#[cfg(windows)]
+fn utc_offset_secs(_secs: i64) -> i64 {
+    use windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
+    let mut tz = TIME_ZONE_INFORMATION::default();
+    // SAFETY: the call only writes into the struct it is given.
+    let bias = match unsafe { GetTimeZoneInformation(&mut tz) } {
+        1 => tz.Bias + tz.StandardBias, // TIME_ZONE_ID_STANDARD
+        2 => tz.Bias + tz.DaylightBias, // TIME_ZONE_ID_DAYLIGHT
+        0 => tz.Bias,                   // TIME_ZONE_ID_UNKNOWN: no daylight saving time
+        _ => 0,                         // TIME_ZONE_ID_INVALID
+    };
+    // In minutes, and the other way round: UTC = local time + bias.
+    -i64::from(bias) * 60
 }
 
 #[cfg(test)]
@@ -970,5 +987,16 @@ mod tests {
         let t = today();
         assert_eq!(t.len(), 10);
         assert!(t.as_str() >= "2026-01-01", "{t}");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    #[test]
+    fn the_time_zone_offset_is_read_from_windows() {
+        // Every time zone lies within UTC-12 and UTC+14.
+        let offset = super::utc_offset_secs(0);
+        assert!((-12 * 3600..=14 * 3600).contains(&offset), "{offset}");
+        assert_eq!(super::today().len(), "2026-11-11".len());
     }
 }

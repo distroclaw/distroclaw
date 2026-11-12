@@ -4,6 +4,9 @@ All notable changes to DistroClaw Community are listed here. The format follows 
 
 ## [Unreleased]
 
+### Added
+- DistroClaw for Windows 10 and 11 (x64): the same app, installed with `DistroClaw-Setup.exe` for the current user, without administrator rights and without going online. It adds a Start menu entry and an uninstaller that keeps your chats and models unless you choose to delete them. The AI engine runs on the processor, or on a separate graphics card through Vulkan. The installer is not code-signed yet, so Windows warns before running it.
+
 ## [0.2.0] - 2026-11-10
 
 ### Added

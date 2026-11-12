@@ -15,6 +15,18 @@ pub(crate) const MAX_PIPE_BYTES: usize = 4 * 1024 * 1024;
 #[cfg(unix)]
 const GRACE: Duration = Duration::from_millis(800);
 
+/// Windows: start a console program without opening a console window.
+#[cfg(windows)]
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// A program that comes with Windows, from its system folder: a bare name would be looked up in
+/// the app's own folder first.
+#[cfg(windows)]
+pub(crate) fn system_tool(name: &str) -> std::path::PathBuf {
+    let root = std::env::var_os("SystemRoot").map_or_else(|| r"C:\Windows".into(), std::path::PathBuf::from);
+    root.join("System32").join(name)
+}
+
 /// Reads a pipe to its end on a thread, keeping the first `MAX_PIPE_BYTES`.
 pub(crate) fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> JoinHandle<Vec<u8>> {
     std::thread::spawn(move || {
@@ -52,7 +64,11 @@ pub(crate) fn kill_group(child: &mut Child) {
     }
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill").args(["/T", "/F", "/PID", &child.id().to_string()]).output();
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new(system_tool("taskkill.exe"))
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
     }
     let _ = child.kill();
 }

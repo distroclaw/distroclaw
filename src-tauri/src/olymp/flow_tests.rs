@@ -168,7 +168,7 @@ async fn opening_a_local_file_closes_the_web_for_the_rest_of_the_reply() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("plans.txt"), b"Project Falcon launches in March.").unwrap();
     access::add_folder(&svc, &owner, tmp.path().to_path_buf()).await.unwrap();
-    let file = tmp.path().canonicalize().unwrap().join("plans.txt");
+    let file = crate::access::canonicalize(tmp.path()).unwrap().join("plans.txt");
     engine.push(vec![tool_call("olymp_search", json!({ "query": "heat pump subsidies" }))]);
     engine.push(vec![tool_call("read_file", json!({ "path": file.to_string_lossy() }))]);
     engine.push(vec![tool_call("olymp_search", json!({ "query": "Project Falcon launch" }))]);

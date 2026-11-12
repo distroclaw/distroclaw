@@ -30,6 +30,9 @@ export function dirname(path: string): string {
   return i <= 0 ? (i === 0 ? "/" : "") : trimmed.slice(0, i);
 }
 
+/** The separator a path uses: "\" for Windows paths (C:\Users\…), "/" otherwise. */
+const separator = (path: string) => (path.includes("\\") && !path.includes("/") ? "\\" : "/");
+
 /** The deepest folder that contains every path; "" when they share nothing useful. */
 export function commonParent(paths: string[]): string {
   if (paths.length === 0) return "";
@@ -44,13 +47,14 @@ export function commonParent(paths: string[]): string {
   // Fewer than two real segments (e.g. "/" or "/Users") is not worth hiding.
   const kept = first.slice(0, n);
   if (kept.filter(Boolean).length < 2) return "";
-  return kept.join("/") || "/";
+  return kept.join(separator(paths[0])) || "/";
 }
 
 /** `path` relative to `parent`, or the full path when it is not inside. */
 export function relativeTo(path: string, parent: string): string {
   if (!parent) return path;
-  const prefix = parent.endsWith("/") ? parent : `${parent}/`;
+  const sep = separator(parent);
+  const prefix = parent.endsWith(sep) ? parent : `${parent}${sep}`;
   return path.startsWith(prefix) ? path.slice(prefix.length) : path;
 }
 

@@ -183,7 +183,51 @@ pub fn protect_home(scope: &mut Scope, home: &Path) {
 }
 
 pub(crate) fn canonical_or(path: PathBuf) -> PathBuf {
-    path.canonicalize().unwrap_or(path)
+    canonicalize(&path).unwrap_or(path)
+}
+
+/// `path` made canonical. On Windows without the `\\?\` prefix the standard library adds, so it
+/// compares with, and reads like, the paths people and the folder picker use.
+#[cfg(windows)]
+pub(crate) fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    dunce::canonicalize(path)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    path.canonicalize()
+}
+
+/// Windows file attributes that hide an item, as a leading dot does elsewhere.
+#[cfg(windows)]
+fn hidden_attributes(md: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
+    md.file_attributes() & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) != 0
+}
+
+/// Whether Windows marks the item at `path` hidden or system. Always false on other systems,
+/// where a leading dot is what hides a name (see `is_skipped`).
+#[cfg(windows)]
+pub fn hidden_by_system(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|md| hidden_attributes(&md))
+}
+
+#[cfg(not(windows))]
+pub fn hidden_by_system(_path: &Path) -> bool {
+    false
+}
+
+/// `hidden_by_system` for an entry of a walk, using the metadata the walk already has.
+#[cfg(windows)]
+pub fn entry_hidden_by_system(entry: &walkdir::DirEntry) -> bool {
+    entry.metadata().is_ok_and(|md| hidden_attributes(&md))
+}
+
+#[cfg(not(windows))]
+pub fn entry_hidden_by_system(_entry: &walkdir::DirEntry) -> bool {
+    false
 }
 
 pub(crate) fn item_name(path: &Path) -> String {
@@ -265,7 +309,13 @@ impl From<AccessError> for AppError {
 
 /// Names of directories and files no tool lists, reads or writes.
 pub fn is_skipped(name: &str, include_hidden: bool) -> bool {
-    SKIPPED_DIRS.contains(&name) || SKIPPED_FILES.contains(&name) || (!include_hidden && name.starts_with('.'))
+    let listed = |list: &[&str]| list.iter().any(|l| same_name(l, name));
+    listed(SKIPPED_DIRS) || listed(SKIPPED_FILES) || (!include_hidden && name.starts_with('.'))
+}
+
+/// Windows ignores case in file names (`$Recycle.Bin`, `thumbs.db`); elsewhere names match exactly.
+fn same_name(a: &str, b: &str) -> bool {
+    if cfg!(windows) { a.eq_ignore_ascii_case(b) } else { a == b }
 }
 
 fn io(e: std::io::Error) -> AccessError {
@@ -287,17 +337,22 @@ pub(crate) fn check_raw(raw: &str) -> Result<PathBuf, AccessError> {
 /// canonical, plus the remaining components. None when not even the drive exists.
 pub(crate) fn nearest_canonical(abs: &Path) -> Option<PathBuf> {
     abs.ancestors().find_map(|a| {
-        let canonical = a.canonicalize().ok()?;
+        let canonical = canonicalize(a).ok()?;
         Some(canonical.join(abs.strip_prefix(a).ok()?))
     })
 }
 
-/// True if any component below the root is hidden or on the skip lists.
-fn rel_is_hidden(rel: &Path) -> Option<String> {
+/// True if any component of `rel` below `root` is hidden (a leading dot, or Windows' hidden or
+/// system attribute) or on the skip lists.
+fn rel_is_hidden(root: &Path, rel: &Path) -> Option<String> {
+    let mut at = root.to_path_buf();
     rel.components().find_map(|c| match c {
         Component::Normal(n) => {
+            if cfg!(windows) {
+                at.push(n);
+            }
             let n = n.to_string_lossy();
-            is_skipped(&n, false).then(|| n.into_owned())
+            (is_skipped(&n, false) || (cfg!(windows) && hidden_by_system(&at))).then(|| n.into_owned())
         }
         _ => None,
     })
@@ -307,7 +362,7 @@ impl Scope {
     pub fn from_folders(folders: &[AllowedFolder], ent: &Entitlements) -> Self {
         let mut scope = Self { roots: vec![], file_limit: ent.folder_limit().map(|l| l.files), guards: vec![] };
         for f in folders {
-            if let Ok(path) = Path::new(&f.path).canonicalize()
+            if let Ok(path) = canonicalize(Path::new(&f.path))
                 && path.is_dir()
             {
                 scope.add_root(Root { path, label: f.label.clone(), mode: f.mode, kind: RootKind::Folder });
@@ -361,7 +416,7 @@ impl Scope {
     }
 
     pub(crate) fn resolve_existing_path(&self, abs: &Path, need: Mode) -> Result<Resolved<'_>, AccessError> {
-        let canonical = match abs.canonicalize() {
+        let canonical = match canonicalize(abs) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // Say "outside" rather than "missing" for paths that could never be allowed.
@@ -380,7 +435,7 @@ impl Scope {
         }
         self.check(&canonical, need)?;
         let rel = canonical.strip_prefix(&root.path).unwrap_or(Path::new("")).to_path_buf();
-        if let Some(n) = rel_is_hidden(&rel) {
+        if let Some(n) = rel_is_hidden(&root.path, &rel) {
             return Err(AccessError::Hidden(n));
         }
         Ok(Resolved { path: canonical, root, rel })
@@ -392,11 +447,9 @@ impl Scope {
 pub fn count_files(dir: &Path, limit: usize) -> (u64, bool) {
     let mut count = 0u64;
     let mut visited = 0usize;
-    let walk = walkdir::WalkDir::new(dir)
-        .follow_links(false)
-        .max_depth(MAX_DEPTH)
-        .into_iter()
-        .filter_entry(|e| e.depth() == 0 || !is_skipped(&e.file_name().to_string_lossy(), false));
+    let walk = walkdir::WalkDir::new(dir).follow_links(false).max_depth(MAX_DEPTH).into_iter().filter_entry(|e| {
+        e.depth() == 0 || !(is_skipped(&e.file_name().to_string_lossy(), false) || entry_hidden_by_system(e))
+    });
     for entry in walk.flatten() {
         visited += 1;
         if entry.file_type().is_file() {
@@ -491,7 +544,7 @@ pub(crate) mod tests {
     use std::fs;
 
     pub(crate) fn root(dir: &Path, label: &str, mode: Mode) -> Root {
-        Root { path: dir.canonicalize().unwrap(), label: label.into(), mode, kind: RootKind::Folder }
+        Root { path: canonicalize(dir).unwrap(), label: label.into(), mode, kind: RootKind::Folder }
     }
 
     #[test]
@@ -525,7 +578,7 @@ pub(crate) mod tests {
             fs::create_dir_all(home.join(rel).parent().unwrap()).unwrap();
             fs::write(home.join(rel), body).unwrap();
         }
-        home.canonicalize().unwrap()
+        canonicalize(&home).unwrap()
     }
 
     #[test]
@@ -534,7 +587,7 @@ pub(crate) mod tests {
         let home = fake_home(tmp.path());
         let protected = |scope: &Scope, rel: &str| matches!(scope.resolve_existing(&s(&home.join(rel)), Mode::Read), Err(AccessError::Protected(m)) if m.contains("private"));
         // The home folder itself, or a folder containing it.
-        for picked in [home.clone(), tmp.path().canonicalize().unwrap()] {
+        for picked in [home.clone(), canonicalize(tmp.path()).unwrap()] {
             let mut scope = Scope::for_tests(vec![root(&picked, "Picked", Mode::Read)], None);
             protect_home(&mut scope, &home);
             assert!(scope.resolve_existing(&s(&home.join("Documents/report.txt")), Mode::Read).is_ok());
@@ -604,6 +657,58 @@ pub(crate) mod tests {
         std::os::unix::fs::symlink(outside.join("secret.txt"), inside.join("link.txt")).unwrap();
         let scope = Scope::for_tests(vec![root(&inside, "Docs", Mode::ReadWrite)], None);
         assert_eq!(scope.resolve_existing(&s(&inside.join("link.txt")), Mode::Read).unwrap_err(), AccessError::Outside);
+    }
+
+    /// Runs a program that comes with Windows and checks that it worked.
+    #[cfg(windows)]
+    fn windows_tool(name: &str, args: &[&std::ffi::OsStr]) {
+        let out = std::process::Command::new(crate::process::system_tool(name)).args(args).output().unwrap();
+        assert!(out.status.success(), "{name}: {}", String::from_utf8_lossy(&out.stdout));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_read_plainly_and_junctions_cannot_escape_a_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (inside, outside) = (tmp.path().join("docs"), tmp.path().join("other"));
+        fs::create_dir_all(&inside).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(inside.join("a.txt"), b"a").unwrap();
+        fs::write(outside.join("secret.txt"), b"s").unwrap();
+        let scope = Scope::for_tests(vec![root(&inside, "Docs", Mode::Read)], None);
+        let found = scope.resolve_existing(&s(&inside.join("a.txt")), Mode::Read).unwrap();
+        assert!(!s(&found.path).starts_with(r"\\?\"), "{}", found.path.display());
+        // A junction, Windows' link to a folder, is not followed out of the root.
+        let link = inside.join("link");
+        windows_tool(
+            "cmd.exe",
+            &["/C".as_ref(), "mklink".as_ref(), "/J".as_ref(), link.as_os_str(), outside.as_os_str()],
+        );
+        assert_eq!(scope.resolve_existing(&s(&link.join("secret.txt")), Mode::Read).unwrap_err(), AccessError::Outside);
+        assert_eq!(count_files(&inside, 100), (1, false));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_hidden_and_system_items_are_skipped_like_dot_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("docs");
+        fs::create_dir_all(dir.join("Hidden folder")).unwrap();
+        fs::write(dir.join("Hidden folder").join("in.txt"), b"x").unwrap();
+        fs::write(dir.join("hidden.txt"), b"h").unwrap();
+        fs::write(dir.join("shown.txt"), b"s").unwrap();
+        for name in ["Hidden folder", "hidden.txt"] {
+            windows_tool("attrib.exe", &["+h".as_ref(), dir.join(name).as_os_str()]);
+        }
+        let scope = Scope::for_tests(vec![root(&dir, "Docs", Mode::Read)], None);
+        assert!(scope.resolve_existing(&s(&dir.join("shown.txt")), Mode::Read).is_ok());
+        for rel in ["hidden.txt", r"Hidden folder\in.txt"] {
+            let refused = scope.resolve_existing(&s(&dir.join(rel)), Mode::Read);
+            assert!(matches!(refused, Err(AccessError::Hidden(_))), "{rel}: {refused:?}");
+        }
+        assert_eq!(count_files(&dir, 100), (1, false));
+        // The skip lists match in any case, as Windows names do.
+        assert!(is_skipped("$Recycle.Bin", false) && is_skipped("THUMBS.DB", false));
     }
 
     #[test]

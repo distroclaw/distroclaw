@@ -64,7 +64,8 @@ pub fn detect(data_dir: &Path) -> HardwareReport {
 
 /// Free space on the disk whose mount point is the longest prefix of `dir`.
 pub fn free_disk(dir: &Path) -> u64 {
-    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    // Without Windows' \\?\ prefix, which no mount point (`C:\`) is a prefix of.
+    let dir = crate::access::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     Disks::new_with_refreshed_list()
         .list()
         .iter()
@@ -145,6 +146,12 @@ const fn gb(x: f64) -> u64 {
     (x * GB) as u64
 }
 
+/// A model's download in GB: the Apple Silicon (MLX) build macOS gets, or the GGUF build the
+/// Windows engine runs (its size in Ollama's registry, checked 11.11.2026).
+const fn download(mlx: f64, gguf: f64) -> u64 {
+    gb(if cfg!(windows) { gguf } else { mlx })
+}
+
 /// The chat models, smallest first by parameters; the app recommends the largest that fits.
 /// Qwen sizes are the upper end listed on ollama.com (checked 30.10.2026). Gemma's size is its
 /// Apple Silicon download, and its memory need is Qwen 3.5 9B's scaled by their measured peak
@@ -153,42 +160,42 @@ pub const CHAT_MODELS: &[ModelOption] = &[
     ModelOption {
         tag: "qwen3.5:0.8b",
         label: "Qwen 3.5 0.8B",
-        download_bytes: gb(1.3),
+        download_bytes: download(1.3, 1.3),
         min_budget_bytes: 0,
         description: "Smallest and fastest. For computers with little memory; answers are simpler.",
     },
     ModelOption {
         tag: "qwen3.5:2b",
         label: "Qwen 3.5 2B",
-        download_bytes: gb(3.1),
+        download_bytes: download(3.1, 2.5),
         min_budget_bytes: gb(3.5),
         description: "Light. Good for short questions and summaries.",
     },
     ModelOption {
         tag: "qwen3.5:4b",
         label: "Qwen 3.5 4B",
-        download_bytes: gb(4.0),
+        download_bytes: download(4.0, 3.1),
         min_budget_bytes: gb(5.5),
         description: "Balanced. Reliable answers about documents on most laptops.",
     },
     ModelOption {
         tag: "qwen3.5:9b",
         label: "Qwen 3.5 9B",
-        download_bytes: gb(7.6),
+        download_bytes: download(7.6, 6.2),
         min_budget_bytes: gb(10.0),
         description: "Stronger reasoning and better document analysis.",
     },
     ModelOption {
         tag: "gemma4:12b",
         label: "Gemma 4 12B",
-        download_bytes: gb(7.2),
+        download_bytes: download(7.2, 7.5),
         min_budget_bytes: gb(8.5),
         description: "Made by Google. Larger than the 9B, yet needs less memory.",
     },
     ModelOption {
         tag: "qwen3.5:35b-a3b",
         label: "Qwen 3.5 35B-A3B",
-        download_bytes: gb(22.0),
+        download_bytes: download(22.0, 20.6),
         min_budget_bytes: gb(26.0),
         description: "Most capable. Needs a workstation with plenty of memory.",
     },
@@ -374,8 +381,8 @@ mod tests {
 
     #[test]
     fn disk_space_limits_the_choice() {
-        // 9 GB free: the 9B model (7.6 GB + headroom) no longer fits.
-        let r = recommend(&machine(64.0, apple(), 12, 9.0), None);
+        // 8 GB free: the 9B model (its download plus 2 GB headroom) no longer fits.
+        let r = recommend(&machine(64.0, apple(), 12, 8.0), None);
         assert_eq!(r.tag, "qwen3.5:4b");
         let r = recommend(&machine(64.0, apple(), 12, 1.0), None);
         assert_eq!(r.tag, "qwen3.5:0.8b");

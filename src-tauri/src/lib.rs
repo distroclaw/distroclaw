@@ -97,6 +97,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // Windows: the local profile (%LOCALAPPDATA%), not the roaming one. The models take
+            // several GB and the database uses SQLite's WAL; neither belongs in a profile that is
+            // copied to a server or redirected to a network share.
+            #[cfg(windows)]
+            let data_dir = app.path().app_local_data_dir()?;
+            #[cfg(not(windows))]
             let data_dir = app.path().app_data_dir()?;
             let opened = std::fs::create_dir_all(&data_dir)
                 .map_err(|e| format!("The data folder {} cannot be used: {e}", data_dir.display()))

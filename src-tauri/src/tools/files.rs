@@ -150,7 +150,10 @@ fn entries(dir: &Path, include_hidden: bool) -> Result<Vec<Entry>, String> {
         let name = e.file_name().to_string_lossy().into_owned();
         let Ok(ft) = e.file_type() else { continue };
         // Links are never followed: they could point outside the allowed folders.
-        if ft.is_symlink() || access::is_skipped(&name, include_hidden) {
+        if ft.is_symlink()
+            || access::is_skipped(&name, include_hidden)
+            || (!include_hidden && cfg!(windows) && access::hidden_by_system(&e.path()))
+        {
             continue;
         }
         let md = e.metadata().ok();
@@ -305,6 +308,7 @@ fn search_files(scope: &Scope, a: SearchArgs) -> Result<ToolOk, String> {
                 let name = e.file_name().to_string_lossy();
                 let allowed = e.depth() == 0
                     || (!access::is_skipped(&name, false)
+                        && !access::entry_hidden_by_system(e)
                         && !(*skip_heavy && e.depth() == 1 && HEAVY_HOME_DIRS.contains(&name.as_ref())));
                 allowed && scope.check(e.path(), Mode::Read).is_ok()
             });

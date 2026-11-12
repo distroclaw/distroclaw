@@ -21,6 +21,10 @@ The app recommends the largest model that fits the memory available for AI (abou
 
 Models live in the app's data folder, `~/Library/Application Support/com.distroclaw.app/models/`. **Settings > Model** lists the installed models with their size, shows the licence of the model in use, removes models and opens the data folder. Removing the model in use takes you back to the model setup.
 
+## On Windows
+
+Models live in `%LOCALAPPDATA%\com.distroclaw.app\models\`. The Windows engine runs the GGUF build of each model, which the library serves under the same tag with `-gguf` (`qwen3.5:4b-gguf`); the app installs it under the catalogue name, so everything else is the same as on a Mac. The GGUF downloads are about 1.3, 2.5, 3.1, 6.2, 7.5 and 20.6 GB (smallest to largest model; `CHAT_MODELS` holds both sizes). The memory available for AI is a dedicated NVIDIA graphics card's memory (4 GB or more), otherwise half of the RAM; without such a card the app suggests at most Qwen 3.5 4B (2B with fewer than four cores), because larger models are slow on a processor.
+
 ## The model library
 
 The library is a set of static files in the layout the engine downloads from:
@@ -55,6 +59,20 @@ node scripts/publish-model.mjs qwen3.5:9b --to r2
 It checks every file against its digest, uploads the files first and the manifest last (so the library never lists an incomplete model), and skips files the library already has. A model with several variants is published in its variant for Apple Silicon (`--runner mlx`, the default). For R2 it needs `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` (an API token limited to the bucket) and `R2_BUCKET` (default `distroclaw-models`) in the environment.
 
 To try a library without R2, write it into a folder with `--to <folder>`, serve that folder over HTTP on `127.0.0.1:<port>` and build a development version with `DISTROCLAW_MODEL_LIBRARY=127.0.0.1:<port>`; development builds reach a library on this computer without HTTPS.
+
+### The GGUF builds for Windows
+
+The Windows app asks for `<tag>-gguf`. The GGUF build is the variant Ollama's engine downloads on Windows (runner `llamacpp`); an engine on a Mac takes the MLX build instead. So:
+
+1. On a Windows PC, pull the models with Ollama 0.40.13: `ollama pull qwen3.5:4b` and so on.
+2. Copy that model store (`%USERPROFILE%\.ollama\models`) to the Mac that publishes. Publishing into a folder needs a Mac or Linux, because the files are named `sha256:<digest>` and Windows file names cannot contain a colon.
+3. Publish the GGUF variant under the `-gguf` tag, first into a folder to test it, then, once a Windows build has downloaded and run it from there, to R2:
+
+```sh
+OLLAMA_MODELS=<copied store> node scripts/publish-model.mjs qwen3.5:0.8b qwen3.5:2b qwen3.5:4b qwen3.5:9b gemma4:12b qwen3.5:35b-a3b --runner llamacpp --tag-suffix -gguf --to <folder>
+```
+
+The files go under the same model names as the MLX builds, so the redirect to `files.distroclaw.com` applies to them unchanged.
 
 ## Adding or changing a model
 

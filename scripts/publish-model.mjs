@@ -7,7 +7,10 @@
 //
 //   node scripts/publish-model.mjs <tag>... --to <folder>   write the library into a folder (testing)
 //   node scripts/publish-model.mjs <tag>... --to r2         upload it to Cloudflare R2
-//   --runner <name>   the variant to publish when a model has several (default mlx: Apple Silicon)
+//   --runner <name>   the variant to publish when a model has several (default mlx: Apple Silicon;
+//                     llamacpp: the GGUF build the Windows engine runs)
+//   --tag-suffix <s>  publish under the tag plus <s>: the GGUF builds go under -gguf
+//                     (qwen3.5:4b-gguf), where the Windows app asks for them
 //
 // The models come from the engine's model store on this computer (OLLAMA_MODELS, default
 // ~/.ollama/models), where `ollama pull <tag>` put them. Every file is checked against its SHA-256
@@ -29,10 +32,12 @@ const PARALLEL = 6;
 
 const args = process.argv.slice(2);
 const to = args.includes("--to") ? args[args.indexOf("--to") + 1] : null;
-const tags = args.filter((a, i) => !a.startsWith("--") && !["--to", "--runner"].includes(args[i - 1]));
+const tags = args.filter((a, i) => !a.startsWith("--") && !["--to", "--runner", "--tag-suffix"].includes(args[i - 1]));
 const store = process.env.OLLAMA_MODELS ?? path.join(os.homedir(), ".ollama/models");
 /** The variant published when a model has several: the one for Apple Silicon. */
 const runner = args.includes("--runner") ? args[args.indexOf("--runner") + 1] : "mlx";
+/** Added to the tag the library lists the model under; the local model keeps its own tag. */
+const tagSuffix = args.includes("--tag-suffix") ? args[args.indexOf("--tag-suffix") + 1] : "";
 
 function fail(message) {
   console.error(`publish-model: ${message}`);
@@ -246,6 +251,6 @@ for (const tag of tags) {
     uploaded++;
   });
   // Last: only now does the library list the model.
-  await target.putBytes(`${prefix}/manifests/${model.version}`, model.manifestBytes, model.manifest.mediaType);
-  console.log(`${tag}: published to ${to === "r2" ? "R2" : path.resolve(to)} (${uploaded} files written, ${skipped} already there)`);
+  await target.putBytes(`${prefix}/manifests/${model.version}${tagSuffix}`, model.manifestBytes, model.manifest.mediaType);
+  console.log(`${tag}${tagSuffix}: published to ${to === "r2" ? "R2" : path.resolve(to)} (${uploaded} files written, ${skipped} already there)`);
 }

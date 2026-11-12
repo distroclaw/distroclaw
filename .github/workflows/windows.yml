@@ -1,0 +1,198 @@
+# Windows installer: builds DistroClaw-Setup.exe for Windows 10 and 11 (x64), then installs it on
+# the runner, tests it offline and uninstalls it (scripts/windows-smoke-test.ps1). Runs on release
+# tags and by hand. It only uploads a build artifact; putting the installer on a GitHub release
+# stays a manual step after the tests (docs/BUILDING.md).
+name: windows
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      update_lock:
+        description: Pin the engine for Windows in scripts/engine.lock.json instead of building
+        type: boolean
+        default: false
+
+# Read-only: this workflow cannot create or change releases.
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  installer:
+    runs-on: windows-2025
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      # Skills and prompts are built into the app as committed, with LF line endings.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+        with:
+          path: source
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: source/.nvmrc
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+
+      - name: Rust toolchain (rust-toolchain.toml)
+        working-directory: source
+        run: rustup toolchain install
+
+      - name: npm packages
+        working-directory: source
+        run: npm ci
+
+      # Only DistroClaw Community is ever built here. In the private repository the public tree is
+      # exported first; the public repository is that tree already.
+      - name: Community tree
+        id: tree
+        run: |
+          if (Test-Path source/scripts/export-community.mjs) {
+            node source/scripts/export-community.mjs build
+            if ($LASTEXITCODE) { exit 1 }
+            "dir=build" >> $env:GITHUB_OUTPUT
+          } else {
+            "dir=source" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: No private code in the build
+        working-directory: ${{ steps.tree.outputs.dir }}
+        run: |
+          $found = 'src-tauri/src/pro', 'src/pro', 'src-tauri/skills/pro', 'edition', 'scripts/export-community.mjs' |
+            Where-Object { Test-Path $_ }
+          if ($found) { throw "private code in the build tree: $found" }
+
+      - name: Tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: ${{ steps.tree.outputs.dir }}
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($env:TAG -ne "v$version") { throw "tag $env:TAG does not match version $version in tauri.conf.json" }
+
+      - name: npm packages (Community tree)
+        if: steps.tree.outputs.dir != 'source'
+        working-directory: ${{ steps.tree.outputs.dir }}
+        run: npm ci
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ steps.tree.outputs.dir }}/src-tauri
+
+      # Ollama's own Windows release, at the version pinned in scripts/engine.lock.json: checked
+      # against the release's checksums and Ollama's code signature before prepare-engine checks
+      # every file against the lock.
+      - name: AI engine
+        working-directory: ${{ steps.tree.outputs.dir }}
+        run: |
+          $version = (Get-Content scripts/engine.lock.json -Raw | ConvertFrom-Json).version
+          $base = "https://github.com/ollama/ollama/releases/download/v$version"
+          $zip = Join-Path $env:RUNNER_TEMP 'ollama-windows-amd64.zip'
+          $sums = Join-Path $env:RUNNER_TEMP 'ollama-sha256sum.txt'
+          Invoke-WebRequest "$base/ollama-windows-amd64.zip" -OutFile $zip
+          Invoke-WebRequest "$base/sha256sum.txt" -OutFile $sums
+          $want = (Get-Content $sums | Where-Object { $_ -match '\s\.?/?ollama-windows-amd64\.zip$' }) -replace '\s.*$', ''
+          $have = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if (-not $want -or $have -ne $want) { throw "ollama-windows-amd64.zip: SHA-256 $have, the release lists '$want'" }
+          $engine = Join-Path $env:RUNNER_TEMP 'ollama'
+          New-Item -ItemType Directory -Force $engine | Out-Null
+          # Windows' own tar reads zip files (Git's tar, also on the PATH, does not).
+          & "$env:SystemRoot\System32\tar.exe" -xf $zip -C $engine --exclude 'lib/ollama/cuda_*'
+          if ($LASTEXITCODE) { throw 'unpacking the engine failed' }
+          foreach ($f in Get-ChildItem $engine -Recurse -Include *.exe, *.dll) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Ollama Inc\.') {
+              throw "$($f.Name): signature $($sig.Status), $($sig.SignerCertificate.Subject)"
+            }
+          }
+          "OLLAMA_RESOURCES=$engine" >> $env:GITHUB_ENV
+
+      - name: Pin the engine
+        if: inputs.update_lock
+        working-directory: ${{ steps.tree.outputs.dir }}
+        run: npm run prepare-engine -- --no-model --update-lock
+
+      - uses: actions/upload-artifact@v4
+        if: inputs.update_lock
+        with:
+          name: engine-lock
+          path: ${{ steps.tree.outputs.dir }}/scripts/engine.lock.json
+
+      - name: Stage the engine
+        if: ${{ !inputs.update_lock }}
+        working-directory: ${{ steps.tree.outputs.dir }}
+        run: npm run prepare-engine -- --no-model
+
+      # The app shows these in Settings > Licences; the committed file is the macOS one.
+      - name: Licence notices for Windows
+        if: ${{ !inputs.update_lock }}
+        working-directory: ${{ steps.tree.outputs.dir }}
+        run: node scripts/third-party-notices.mjs --target x86_64-pc-windows-msvc
+
+      - name: Typecheck and frontend build
+        if: ${{ !inputs.update_lock }}
+        working-directory: ${{ steps.tree.outputs.dir }}
+        run: |
+          npm run typecheck
+          npx vite build
+
+      - name: Rust lint and tests
+        if: ${{ !inputs.update_lock }}
+        working-directory: ${{ steps.tree.outputs.dir }}/src-tauri
+        run: |
+          # Temporary files outside the user profile: the app keeps all of AppData (where %TEMP%
+          # usually is) out of reach, so tests with folders there would be refused.
+          $env:TMP = $env:TEMP = New-Item -ItemType Directory -Force (Join-Path $env:RUNNER_TEMP 'cargo-test')
+          cargo clippy --all-targets -- -D warnings
+          if ($LASTEXITCODE) { exit 1 }
+          cargo test
+          if ($LASTEXITCODE) { exit 1 }
+
+      - name: Build the installer
+        if: ${{ !inputs.update_lock }}
+        working-directory: ${{ steps.tree.outputs.dir }}
+        run: |
+          npx tauri build --bundles nsis --config src-tauri/tauri.bundle.conf.json
+          if ($LASTEXITCODE) { exit 1 }
+          $built = @(Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe)
+          if ($built.Count -ne 1) { throw "expected one installer, found: $($built.Name -join ', ')" }
+          $out = Join-Path $env:GITHUB_WORKSPACE 'out'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          # No version in the name, so releases/latest/download/DistroClaw-Setup.exe keeps working.
+          Copy-Item $built[0].FullName (Join-Path $out 'DistroClaw-Setup.exe')
+          Copy-Item THIRD_PARTY_NOTICES.md (Join-Path $out 'THIRD_PARTY_NOTICES.windows.md')
+          $hash = (Get-FileHash (Join-Path $out 'DistroClaw-Setup.exe') -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText((Join-Path $out 'DistroClaw-Setup.exe.sha256'), "$hash  DistroClaw-Setup.exe`n")
+          Write-Host "DistroClaw-Setup.exe: $([math]::Round((Get-Item (Join-Path $out 'DistroClaw-Setup.exe')).Length / 1MB)) MB, SHA-256 $hash"
+
+      - name: Smoke test (install, offline use, uninstall)
+        if: ${{ !inputs.update_lock }}
+        working-directory: ${{ steps.tree.outputs.dir }}
+        run: pwsh scripts/windows-smoke-test.ps1 -Installer "$env:GITHUB_WORKSPACE/out/DistroClaw-Setup.exe" -Report "$env:GITHUB_WORKSPACE/out/smoke-test"
+
+      - name: Smoke test report
+        if: ${{ always() && !inputs.update_lock }}
+        run: |
+          $md = Join-Path $env:GITHUB_WORKSPACE 'out/smoke-test/smoke-test.md'
+          if (Test-Path $md) { Get-Content $md -Raw >> $env:GITHUB_STEP_SUMMARY }
+
+      # Only after every test passed. The release itself is made by hand.
+      - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.update_lock }}
+        with:
+          name: DistroClaw-Setup-windows-x64
+          path: out/
+          if-no-files-found: error
+          retention-days: 30

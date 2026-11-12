@@ -551,7 +551,60 @@ fn spawn_engine(
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    cmd.spawn()
+    let child = cmd.spawn()?;
+    #[cfg(windows)]
+    windows_job::adopt(&child);
+    Ok(child)
+}
+
+/// Windows has no process groups. Instead the engine joins a job that lives as long as the app:
+/// when the app ends, however it ends (quit, crash, Task Manager, the installer closing it),
+/// Windows ends the engine and its runners with it, so none keeps the app's files in use.
+#[cfg(windows)]
+mod windows_job {
+    use std::os::windows::io::AsRawHandle;
+    use std::sync::OnceLock;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, SetInformationJobObject,
+    };
+
+    /// The job, as the address of its handle. It is never closed: Windows closes it when the app ends.
+    static JOB: OnceLock<Option<usize>> = OnceLock::new();
+
+    fn job() -> Option<HANDLE> {
+        let job = *JOB.get_or_init(|| {
+            // SAFETY: plain Win32 calls; `limits` outlives the call that reads it.
+            unsafe {
+                let job = CreateJobObjectW(None, windows::core::PCWSTR::null()).ok()?;
+                let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const limits).cast(),
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+                .ok()?;
+                Some(job.0 as usize)
+            }
+        });
+        job.map(|h| HANDLE(h as *mut core::ffi::c_void))
+    }
+
+    /// Puts the engine, and every runner it starts from now on, into the app's job. Without it the
+    /// engine still works; it is then stopped at exit, or at the next start after a crash.
+    pub(super) fn adopt(child: &std::process::Child) {
+        let Some(job) = job() else {
+            log::warn!("the engine could not be tied to the app: no job object");
+            return;
+        };
+        // SAFETY: both handles are open: the job for the app's lifetime, the process while `child` lives.
+        if let Err(e) = unsafe { AssignProcessToJobObject(job, HANDLE(child.as_raw_handle())) } {
+            log::warn!("the engine could not be tied to the app: {e}");
+        }
+    }
 }
 
 /// The engine log keeps the previous run's tail: it is appended to and rolled over at 2 MB,
@@ -630,8 +683,10 @@ fn stop_group(pid: u32) {
 fn stop_group(pid: u32) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let _ =
-        Command::new("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).creation_flags(CREATE_NO_WINDOW).status();
+    let _ = Command::new(crate::process::system_tool("taskkill.exe"))
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
 }
 
 /// Stop the engine and every runner it spawned.
@@ -654,7 +709,7 @@ fn stop_tree(mut child: Child) {
 fn stop_tree(mut child: Child) {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let _ = Command::new("taskkill")
+    let _ = Command::new(crate::process::system_tool("taskkill.exe"))
         .args(["/T", "/F", "/PID", &child.id().to_string()])
         .creation_flags(CREATE_NO_WINDOW)
         .status();

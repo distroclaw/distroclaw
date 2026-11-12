@@ -1,0 +1,9 @@
+Microsoft Visual C++ runtime libraries
+
+The Windows engine includes these files of the Microsoft Visual C++ Redistributable, unmodified,
+as shipped in Ollama's Windows release (lib/ollama/vulkan): concrt140.dll, msvcp140.dll,
+msvcp140_1.dll, msvcp140_2.dll, msvcp140_atomic_wait.dll, msvcp140_codecvt_ids.dll,
+vccorlib140.dll, vcruntime140.dll, vcruntime140_1.dll and vcruntime140_threads.dll.
+
+Copyright (c) Microsoft Corporation. All rights reserved. Microsoft's license terms for the
+Visual C++ Redistributable apply to these files.

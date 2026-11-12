@@ -69,6 +69,14 @@ cd docs/olymp
 SEARXNG_SECRET=$(openssl rand -hex 32) docker compose up -d
 ```
 
+On Windows, in PowerShell with Docker Desktop running:
+
+```powershell
+cd docs\olymp
+$env:SEARXNG_SECRET = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })
+docker compose up -d
+```
+
 This starts SearXNG on `http://127.0.0.1:8888` (the address Olymp tries by default) and Crawl4AI on `http://127.0.0.1:11235`. Both are published on 127.0.0.1 only, so other computers on your network cannot reach them. Or let the app do it (Settings > Olymp > **Set up SearXNG and Crawl4AI**). If you start them yourself, then in **Settings > Olymp**:
 
 1. Leave the SearXNG address empty (it uses `http://127.0.0.1:8888`).

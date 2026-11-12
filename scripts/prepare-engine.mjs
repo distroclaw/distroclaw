@@ -5,14 +5,15 @@
 //   --no-model        stage the runtime only (standard edition: the app downloads the model on
 //                     first run, after the user agrees). Without it: the offline edition.
 //   --update-lock     record the staged engine in scripts/engine.lock.json instead of checking it
-//                     (after deliberately moving to another engine version; macOS checks the
-//                     publisher's signature first).
+//                     (after deliberately moving to another engine version; macOS and Windows
+//                     check the publisher's signature first).
 //
 //   The staged engine must match scripts/engine.lock.json: the pinned version and the SHA-256 of
 //   every file. Anything else stops the build.
 //
 //   OLLAMA_RESOURCES  Ollama runtime dir. macOS default: /Applications/Ollama.app/Contents/Resources.
 //                     Windows: required — an unpacked ollama-windows-amd64.zip (ollama.exe + lib/).
+//                     Windows stages the CPU and Vulkan runtimes only, not CUDA, ROCm or MLX.
 //   OLLAMA_MODELS     Ollama model store       (default: ~/.ollama/models)
 //   DISTROCLAW_MODEL  model tag                (default: qwen3.5:4b)
 
@@ -38,6 +39,9 @@ const model = process.env.DISTROCLAW_MODEL ?? "qwen3.5:4b";
 
 // App UI assets of Ollama.app that the engine does not need.
 const SKIP = /\.(png|svg|icns)$/i;
+// Windows: the GPU runtimes left out. The engine runs on the CPU, or on the GPU through Vulkan;
+// CUDA alone would add 2 GB, more than the installer can hold.
+const SKIP_WINDOWS = /^(cuda_|rocm|mlx)/i;
 
 function fail(msg) {
   console.error(`prepare-engine: ${msg}`);
@@ -56,6 +60,7 @@ function copyEngine() {
     fs.cpSync(path.join(runtimeDir, name), path.join(outEngine, name), {
       recursive: true,
       dereference: true,
+      ...(isWindows && { filter: (src) => !SKIP_WINDOWS.test(path.basename(src)) }),
     });
   }
   console.log(`engine  -> ${path.relative(root, outEngine)} (${size(outEngine)})`);
@@ -80,7 +85,13 @@ function engineVersion() {
   // A throwaway home and a port nothing listens on: it must not talk to an engine that is running.
   const run = spawnSync(path.join(outEngine, exe), ["--version"], {
     encoding: "utf8",
-    env: { PATH: process.env.PATH, HOME: os.tmpdir(), OLLAMA_HOST: "127.0.0.1:9" },
+    env: {
+      PATH: process.env.PATH,
+      HOME: os.tmpdir(),
+      OLLAMA_HOST: "127.0.0.1:9",
+      // Windows programs need the system folder; the home folder there is USERPROFILE.
+      ...(isWindows && { SystemRoot: process.env.SystemRoot, USERPROFILE: os.tmpdir() }),
+    },
   });
   const out = `${run.stdout ?? ""}${run.stderr ?? ""}`;
   const v = out.match(/(\d+\.\d+\.\d+)/);
@@ -120,6 +131,23 @@ function updateLock() {
     // codesign prints the details on stderr.
     const info = spawnSync("codesign", ["-dv", path.join(runtimeDir, exe)], { encoding: "utf8" }).stderr;
     console.log(`engine  -> signed by team ${(info.match(/TeamIdentifier=(\S+)/) ?? [])[1] ?? "?"}`);
+  }
+  if (isWindows) {
+    // Only an engine with a valid Authenticode signature is pinned. The path goes in through the
+    // environment, so no quoting can change the command.
+    const check = spawnSync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        '$s = Get-AuthenticodeSignature -LiteralPath $env:DC_ENGINE; "$($s.Status)|$($s.SignerCertificate.Subject)"',
+      ],
+      { encoding: "utf8", env: { ...process.env, DC_ENGINE: path.join(runtimeDir, exe) } },
+    );
+    const [status, subject = ""] = (check.stdout ?? "").trim().split("|");
+    if (status !== "Valid") fail(`the engine's signature is not valid: ${status || check.stderr?.trim()}`);
+    console.log(`engine  -> signed by ${subject}`);
   }
   const lock = fs.existsSync(lockFile) ? JSON.parse(fs.readFileSync(lockFile, "utf8")) : { platforms: {} };
   lock.version = engineVersion();

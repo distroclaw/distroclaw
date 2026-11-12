@@ -58,13 +58,40 @@ fn olymp(svc: &Services) -> AppResult<&super::Olymp> {
 
 /// The Docker command line, at its usual places (an app started from the Dock has a short PATH).
 pub fn find_docker() -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> =
-        ["/usr/local/bin/docker", "/opt/homebrew/bin/docker"].iter().map(PathBuf::from).collect();
-    candidates.push(PathBuf::from("/Applications/Docker.app/Contents/Resources/bin/docker"));
+    let mut candidates: Vec<PathBuf> = if cfg!(windows) {
+        // Where Docker Desktop's installer puts it.
+        std::env::var_os("ProgramFiles")
+            .map(|p| PathBuf::from(p).join(r"Docker\Docker\resources\bin\docker.exe"))
+            .into_iter()
+            .collect()
+    } else {
+        let mut unix: Vec<PathBuf> =
+            ["/usr/local/bin/docker", "/opt/homebrew/bin/docker"].iter().map(PathBuf::from).collect();
+        unix.push(PathBuf::from("/Applications/Docker.app/Contents/Resources/bin/docker"));
+        unix
+    };
     if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(std::env::split_paths(&path).map(|d| d.join("docker")));
+        let name = if cfg!(windows) { "docker.exe" } else { "docker" };
+        candidates.extend(std::env::split_paths(&path).map(|d| d.join(name)));
     }
     candidates.into_iter().find(|p| p.is_file())
+}
+
+/// The PATH for Docker: its own folder first (its helpers live there too), then the usual places.
+#[cfg(not(windows))]
+fn docker_path(exe: &Path) -> std::ffi::OsString {
+    let mut path = exe.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    path.push_str(":/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin");
+    path.into()
+}
+
+/// The PATH for Docker: its own folder first (its helpers live there too), then the app's PATH,
+/// which has the system folders Docker Desktop relies on.
+#[cfg(windows)]
+fn docker_path(exe: &Path) -> std::ffi::OsString {
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let dirs = exe.parent().map(Path::to_path_buf).into_iter().chain(std::env::split_paths(&inherited));
+    std::env::join_paths(dirs).unwrap_or(inherited)
 }
 
 /// Runs `docker args…`, with the folder holding Docker on the PATH (its helpers live there too).
@@ -75,10 +102,8 @@ fn docker(
     env: &[(&str, String)],
     timeout: Duration,
 ) -> Result<String, String> {
-    let mut path = exe.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-    path.push_str(":/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin");
     let mut cmd = Command::new(exe);
-    cmd.args(args).env("PATH", path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(args).env("PATH", docker_path(exe)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if let Some(d) = dir {
         cmd.current_dir(d);
     }
@@ -89,6 +114,11 @@ fn docker(
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(crate::process::CREATE_NO_WINDOW);
     }
     let mut child = cmd.spawn().map_err(|e| format!("Docker could not be started ({e})."))?;
     let (out, err) = (crate::process::drain(child.stdout.take()), crate::process::drain(child.stderr.take()));
@@ -353,5 +383,15 @@ mod tests {
         let r = start_services(svc.clone(), &owner);
         assert!(matches!(r, Err(AppError::Invalid(ref m)) if m.contains("isn't running")), "{r:?}");
         assert!(!calls(tmp.path()).iter().any(|c| c.starts_with("compose")));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    #[test]
+    fn docker_runs_with_its_own_folder_first_on_the_path() {
+        let exe = std::path::Path::new(r"C:\Program Files\Docker\Docker\resources\bin\docker.exe");
+        let path = super::docker_path(exe);
+        assert_eq!(std::env::split_paths(&path).next().as_deref(), exe.parent());
     }
 }

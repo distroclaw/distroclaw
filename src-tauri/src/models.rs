@@ -37,10 +37,15 @@ pub const LIBRARY: &str = match option_env!("DISTROCLAW_MODEL_LIBRARY") {
     None => "models.distroclaw.com",
 };
 
-/// The library's name for a catalogue model, e.g. `<host>/distroclaw/qwen3.5:4b`.
+/// The library's name for a catalogue model, e.g. `<host>/distroclaw/qwen3.5:4b`. The library
+/// serves the Apple Silicon (MLX) build under the catalogue tag and the GGUF build, which the
+/// Windows engine runs, under the same tag with `-gguf`.
 pub fn library_ref(tag: &str) -> String {
-    format!("{LIBRARY}/distroclaw/{tag}")
+    format!("{LIBRARY}/distroclaw/{tag}{LIBRARY_VARIANT}")
 }
+
+/// What `library_ref` adds to the tag on this system.
+pub const LIBRARY_VARIANT: &str = if cfg!(windows) { "-gguf" } else { "" };
 
 /// A copy of the library on this computer, reached over plain HTTP; development builds only.
 fn is_local_library(host: &str) -> bool {
@@ -265,7 +270,7 @@ mod tests {
         let fake = FakeEngine::start(vec![STREAM.lines().map(Step::line).collect()]).await;
         let engine = Engine::new(Mode::External(fake.url.clone()));
         let source = library_ref("qwen3.5:4b");
-        assert_eq!(source, format!("{LIBRARY}/distroclaw/qwen3.5:4b"));
+        assert_eq!(source, format!("{LIBRARY}/distroclaw/qwen3.5:4b{LIBRARY_VARIANT}"));
         assert!(!source.contains("registry.ollama.ai") && source.contains("/distroclaw/"));
         pull(&engine, "qwen3.5:4b", &AtomicBool::new(false), &|_, _, _| {}).await.unwrap();
         let pull_request = fake.request(0);

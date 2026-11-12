@@ -6,7 +6,7 @@ DistroClaw runs on your computer. Your chats, documents, attachments, settings a
 
 ## What stays on your computer
 
-Everything you create or open with DistroClaw is stored in its data folder, `~/Library/Application Support/com.distroclaw.app/`:
+Everything you create or open with DistroClaw is stored in its data folder, `~/Library/Application Support/com.distroclaw.app/` (on Windows `%LOCALAPPDATA%\com.distroclaw.app\`):
 
 - conversations, projects, attachments and text extracted from your documents
 - the folders you allowed, your skills and settings

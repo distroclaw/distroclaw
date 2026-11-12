@@ -45,7 +45,7 @@ pub fn scope_limited(svc: &Services, p: &Principal, only: Option<&[String]>) -> 
 pub async fn add_folder(svc: &Services, p: &Principal, path: PathBuf) -> AppResult<AllowedFolder> {
     p.require_admin()?;
     svc.require(Feature::FolderAccess)?;
-    let canonical = tauri::async_runtime::spawn_blocking(move || path.canonicalize())
+    let canonical = tauri::async_runtime::spawn_blocking(move || access::canonicalize(&path))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?
         .map_err(|e| AppError::AccessDenied(format!("Could not open the folder: {e}")))?;
@@ -192,7 +192,7 @@ pub(crate) mod tests {
         assert_eq!(only.roots().len(), 1);
         assert_eq!(scope_limited(&svc, &owner, Some(&[])).unwrap().roots().len(), 2);
         let s = scope(&svc, &owner).unwrap();
-        let data = svc.data_dir.canonicalize().unwrap();
+        let data = access::canonicalize(&svc.data_dir).unwrap();
         assert!(matches!(s.check(&data.join("distroclaw.db"), Mode::Read), Err(access::AccessError::Protected(_))));
     }
 
